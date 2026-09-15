@@ -21,6 +21,7 @@ public class MainViewModel : ObservableObject
     private readonly DeviceService _devices;
     private readonly SigningService _signing;
     private readonly SigningDiscoveryService _discovery;
+    private readonly InstalledAppRegistry _registry;
     private readonly HttpServer _server;
 
     private bool _isServerRunning;
@@ -40,6 +41,7 @@ public class MainViewModel : ObservableObject
         _devices = new DeviceService(_settings.ResolveToolsDir());
         _signing = new SigningService(_settings.ResolveToolsDir());
         _discovery = new SigningDiscoveryService();
+        _registry = new InstalledAppRegistry(AppContext.BaseDirectory);
 
         Devices = new ObservableCollection<Device>();
         InstalledApps = new ObservableCollection<InstalledApp>();
@@ -53,7 +55,16 @@ public class MainViewModel : ObservableObject
         RegisterServerHandlers();
 
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromHours(_settings.Data.RefreshIntervalHours) };
-        _refreshTimer.Tick += async (_, _) => await RefreshAllAsync();
+        _refreshTimer.Tick += async (_, _) =>
+        {
+            // 检查是否有即将过期的应用
+            var expiring = _registry.GetExpiringApps(withinDays: 3);
+            if (expiring.Count > 0)
+            {
+                LogService.Info($"检测到 {expiring.Count} 个应用即将过期，自动续签...");
+                await RefreshAllAsync();
+            }
+        };
 
         _devicePollTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         _devicePollTimer.Tick += (_, _) => PollDevices();
@@ -578,6 +589,16 @@ public class MainViewModel : ObservableObject
             await Task.Run(() => _devices.InstallIpa(device.Udid, signedIpa));
             LogService.Success($"安装成功: {Path.GetFileName(ipaPath)} → {device.Name}");
 
+            // 注册到已安装应用列表
+            _registry.Register(
+                System.IO.Path.GetFileNameWithoutExtension(ipaPath),
+                ipaPath,
+                System.IO.Path.GetFileNameWithoutExtension(ipaPath),
+                device.Udid,
+                _settings.Data.P12Path,
+                _settings.Data.MobileProvisionPath,
+                _settings.Data.P12Password);
+
             LoadDeviceApp();
             return true;
         }
@@ -604,18 +625,64 @@ public class MainViewModel : ObservableObject
             LogService.Info("开始自动刷新所有已安装应用...");
 
             var devices = GetAllDevices();
+            int refreshed = 0, failed = 0;
+
             foreach (var device in devices)
             {
                 LogService.Info($"刷新设备: {device.Name}");
 
-                var apps = _devices.ListInstalledApps(device.Udid);
-                LogService.Info($"  检测到 {apps.Count} 个已安装应用");
+                var apps = _registry.GetInstalledApps(device.Udid);
+                LogService.Info($"  该设备有 {apps.Count} 个已安装应用");
 
-                // 实际刷新逻辑：对每个AltStore管理的应用重新签名安装
-                // TODO: 后续版本在设备上记录AltStore管理的应用列表，逐一重新签名
+                foreach (var app in apps)
+                {
+                    try
+                    {
+                        // 检查缓存的 IPA 是否存在
+                        if (!File.Exists(app.CachedIpaPath))
+                        {
+                            LogService.Warning($"  跳过 {app.AppName}: 缓存 IPA 不存在 ({app.CachedIpaPath})");
+                            continue;
+                        }
+
+                        // 检查是否即将过期（7天内）
+                        if (app.Expiry.HasValue && app.Expiry.Value > DateTime.UtcNow.AddDays(7))
+                        {
+                            LogService.Info($"  跳过 {app.AppName}: 配置文件有效 (剩余 {app.RemainingDays()} 天)");
+                            continue;
+                        }
+
+                        LogService.Info($"  重新签名: {app.AppName}...");
+
+                        var outputIpa = Path.Combine(
+                            Path.GetTempPath(), "AltServer",
+                            $"{app.BundleId}_refreshed_{DateTime.Now:yyyyMMdd_HHmmss}.ipa");
+
+                        var options = new SigningService.SigningOptions
+                        {
+                            P12Path = app.P12Path ?? _settings.Data.P12Path,
+                            P12Password = app.P12Password ?? _settings.Data.P12Password,
+                            MobileProvisionPath = app.ProvisionPath ?? _settings.Data.MobileProvisionPath
+                        };
+
+                        var signedIpa = await _signing.SignIpaAsync(app.CachedIpaPath, outputIpa, options);
+                        LogService.Info($"  签名完成，正在安装...");
+
+                        await Task.Run(() => _devices.InstallIpa(device.Udid, signedIpa));
+                        _registry.MarkRefreshed(app.BundleId, device.Udid);
+
+                        LogService.Success($"  刷新成功: {app.AppName}");
+                        refreshed++;
+                    }
+                    catch (Exception ex)
+                    {
+                        LogService.Error($"  刷新失败 {app.AppName}: {ex.Message}");
+                        failed++;
+                    }
+                }
             }
 
-            LogService.Success("刷新完成");
+            LogService.Success($"刷新完成: 成功 {refreshed} 个, 失败 {failed} 个");
         }
         catch (Exception ex)
         {
@@ -626,6 +693,9 @@ public class MainViewModel : ObservableObject
             IsRefreshing = false;
         }
     }
+
+    /// <summary>获取已安装应用的注册表信息</summary>
+    public InstalledAppRegistry GetRegistry() => _registry;
 
     // MARK: - HTTP API 处理器
 

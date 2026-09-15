@@ -307,27 +307,12 @@
                             </StackPanel>
                         </DockPanel>
 
-                        <ListBox Grid.Row="1" ItemsSource="{Binding LogEntries}" BorderThickness="0"
-                                 Background="#0F172A" ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                 Foreground="White" FontFamily="Consolas" FontSize="12">
-                            <ListBox.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBox Text="{Binding}" Foreground="White"
-                                             FontFamily="Consolas" FontSize="12"
-                                             IsReadOnly="True" IsTextSelectionEnabled="True"
-                                             BorderThickness="0" Background="Transparent"
-                                             Padding="0" MinHeight="0" />
-                                </DataTemplate>
-                            </ListBox.ItemTemplate>
-                            <ListBox.ItemContainerStyle>
-                                <Style TargetType="ListBoxItem">
-                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                                    <Setter Property="Background" Value="#0F172A" />
-                                    <Setter Property="BorderThickness" Value="0" />
-                                    <Setter Property="Padding" Value="0" />
-                                </Style>
-                            </ListBox.ItemContainerStyle>
-                        </ListBox>
+                        <TextBox Grid.Row="1" IsReadOnly="True" TextWrapping="Wrap"
+                             AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
+                             Text="{Binding LogText, Mode=OneWay}"
+                             Background="#0F172A" Foreground="White"
+                             FontFamily="Consolas" FontSize="12"
+                             BorderThickness="0" Padding="4" />
                     </Grid>
                 </Border>
             </Grid>

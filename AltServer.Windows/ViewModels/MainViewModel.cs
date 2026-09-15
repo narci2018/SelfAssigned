@@ -42,6 +42,10 @@ public class MainViewModel : ObservableObject
         Devices = new ObservableCollection<Device>();
         InstalledApps = new ObservableCollection<InstalledApp>();
         LogEntries = new ObservableCollection<string>();
+        LogEntries.CollectionChanged += (_, _) =>
+        {
+            LogText = string.Join(Environment.NewLine, LogEntries);
+        };
 
         _server = new HttpServer(_settings.Data.ServerPort);
         RegisterServerHandlers();
@@ -56,6 +60,13 @@ public class MainViewModel : ObservableObject
     public ObservableCollection<Device> Devices { get; }
     public ObservableCollection<InstalledApp> InstalledApps { get; }
     public ObservableCollection<string> LogEntries { get; }
+
+    private string _logText = string.Empty;
+    public string LogText
+    {
+        get => _logText;
+        private set => SetField(ref _logText, value);
+    }
 
     // MARK: - 绑定属性
 

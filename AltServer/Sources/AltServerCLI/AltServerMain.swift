@@ -1,5 +1,6 @@
 import Foundation
 import AltSign
+import AltServerCore
 
 /// Main entry point for AltServer CLI
 @main

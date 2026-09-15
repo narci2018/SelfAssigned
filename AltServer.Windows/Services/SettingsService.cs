@@ -27,6 +27,8 @@ public class SettingsService
         public string? LastDeviceUdid { get; set; }
         public List<string> TrustedDevices { get; set; } = new();
         public List<Models.Source> Sources { get; set; } = new();
+        public bool SetupCompleted { get; set; }
+        public string? AppleId { get; set; }
     }
 
     public SettingsService()

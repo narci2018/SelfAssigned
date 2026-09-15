@@ -18,8 +18,45 @@ public partial class MainWindow : Window
         InitializeComponent();
         InitializeTrayIcon();
 
-        // 启动时自动扫描签名配置
-        Loaded += (_, _) => ViewModel.ScanSigningConfig();
+        // 首次启动弹出配置向导
+        Loaded += (_, _) =>
+        {
+            var settings = new SettingsService();
+            if (!settings.Data.SetupCompleted && string.IsNullOrEmpty(settings.Data.P12Path))
+            {
+                ShowSetupWizard(settings);
+            }
+            else
+            {
+                ViewModel.ScanSigningConfig();
+            }
+        };
+    }
+
+    private void ShowSetupWizard(SettingsService settings)
+    {
+        var dialog = new AppleSetupDialog(AppContext.BaseDirectory)
+        {
+            Owner = this
+        };
+
+        dialog.ShowDialog();
+
+        if (dialog.ResultP12Path is not null)
+        {
+            settings.Data.P12Path = dialog.ResultP12Path;
+            settings.Data.P12Password = dialog.ResultP12Password ?? "";
+        }
+
+        if (dialog.ResultProvisionPath is not null)
+        {
+            settings.Data.MobileProvisionPath = dialog.ResultProvisionPath;
+        }
+
+        settings.Data.SetupCompleted = true;
+        settings.Save();
+
+        ViewModel.ScanSigningConfig();
     }
 
     // MARK: - 系统托盘

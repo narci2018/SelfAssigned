@@ -1,0 +1,181 @@
+<Window x:Class="AltServer.Windows.Views.AppleSetupDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Apple ID 配置向导" Height="520" Width="500"
+        WindowStartupLocation="CenterOwner"
+        Background="#F8FAFC" ResizeMode="NoResize">
+
+    <Window.Resources>
+        <Style x:Key="StepTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="18" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="#1E293B" />
+        </Style>
+
+        <Style x:Key="InputBox" TargetType="TextBox">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Padding" Value="10,8" />
+            <Setter Property="BorderBrush" Value="#CBD5E1" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Background" Value="White" />
+        </Style>
+
+        <Style x:Key="BtnPrimary" TargetType="Button">
+            <Setter Property="Background" Value="#2563EB" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Padding" Value="20,10" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border" Background="{TemplateBinding Background}"
+                                CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="#1D4ED8" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="border" Property="Background" Value="#94A3B8" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="BtnSecondary" TargetType="Button">
+            <Setter Property="Background" Value="#E2E8F0" />
+            <Setter Property="Foreground" Value="#475569" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Padding" Value="20,10" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- 标题 -->
+        <TextBlock Grid.Row="0" Text="🍎 Apple ID 自动配置" FontSize="22" FontWeight="Bold"
+                   Margin="0,0,0,4" Foreground="#1E293B" />
+        <TextBlock Grid.Row="0" Text="输入 Apple ID，自动申请证书和配置文件"
+                   FontSize="13" Foreground="#64748B" Margin="0,32,0,0" />
+
+        <!-- 步骤内容区 -->
+        <Grid Grid.Row="1" Margin="0,20,0,0">
+            <!-- 步骤1: 登录 -->
+            <Grid x:Name="Step1Panel" Visibility="Visible">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Text="第 1 步: 登录 Apple ID" Style="{StaticResource StepTitle}" Margin="0,0,0,12" />
+
+                <TextBlock Grid.Row="1" Text="Apple ID" FontSize="13" Margin="0,0,0,4" />
+                <TextBox Grid.Row="2" x:Name="AppleIdBox" Style="{StaticResource InputBox}"
+                         Margin="0,0,0,12" />
+
+                <TextBlock Grid.Row="3" Text="密码" FontSize="13" Margin="0,0,0,4" />
+                <PasswordBox Grid.Row="4" x:Name="PasswordBox" Style="{StaticResource InputBox}" />
+            </Grid>
+
+            <!-- 步骤2: 2FA -->
+            <Grid x:Name="Step2Panel" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Text="第 2 步: 双重认证" Style="{StaticResource StepTitle}" Margin="0,0,0,12" />
+
+                <TextBlock Grid.Row="1" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,8"
+                           Text="请输入发送到你设备的 6 位验证码" />
+
+                <TextBox Grid.Row="2" x:Name="CodeBox" Style="{StaticResource InputBox}"
+                         MaxLength="6" FontSize="20" Width="200" HorizontalAlignment="Left"
+                         CharacterCasing="Upper" />
+            </Grid>
+
+            <!-- 步骤3: 设备信息 -->
+            <Grid x:Name="Step3Panel" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Text="第 3 步: 设备信息" Style="{StaticResource StepTitle}" Margin="0,0,0,12" />
+
+                <TextBlock Grid.Row="1" Text="App 名称" FontSize="13" Margin="0,0,0,4" />
+                <TextBox Grid.Row="2" x:Name="AppNameBox" Style="{StaticResource InputBox}"
+                         Text="AltStore" Margin="0,0,0,8" />
+
+                <TextBlock Grid.Row="3" Text="Bundle ID (如 com.yourname.app)" FontSize="13" Margin="0,0,0,4" />
+                <TextBox Grid.Row="4" x:Name="BundleIdBox" Style="{StaticResource InputBox}"
+                         Text="com.altstore.app" Margin="0,0,0,8" />
+
+                <TextBlock Grid.Row="5" Text="设备名称" FontSize="13" Margin="0,0,0,4" />
+                <TextBox Grid.Row="6" x:Name="DeviceNameBox" Style="{StaticResource InputBox}"
+                         Text="My iPhone" Margin="0,0,0,8" />
+            </Grid>
+
+            <!-- 步骤4: 进度/结果 -->
+            <StackPanel x:Name="Step4Panel" Visibility="Collapsed">
+                <TextBlock x:Name="ProgressTitle" Style="{StaticResource StepTitle}" Margin="0,0,0,12" />
+
+                <TextBlock x:Name="ProgressText" FontSize="13" Foreground="#64748B"
+                           TextWrapping="Wrap" Margin="0,0,0,8" />
+
+                <ProgressBar x:Name="ProgressBar" IsIndeterminate="True" Height="4"
+                             Margin="0,0,0,16" Background="#E2E8F0" Foreground="#2563EB" />
+
+                <Border Background="#F0FDF4" CornerRadius="8" Padding="12" Margin="0,0,0,8"
+                        x:Name="SuccessBorder" Visibility="Collapsed">
+                    <StackPanel>
+                        <TextBlock Text="✅ 配置完成!" FontSize="15" FontWeight="Bold" Foreground="#16A34A" />
+                        <TextBlock x:Name="ResultText" FontSize="12" Foreground="#15803D"
+                                   TextWrapping="Wrap" Margin="0,6,0,0" />
+                    </StackPanel>
+                </Border>
+
+                <Border Background="#FEF2F2" CornerRadius="8" Padding="12"
+                        x:Name="ErrorBorder" Visibility="Collapsed">
+                    <StackPanel>
+                        <TextBlock Text="❌ 配置失败" FontSize="15" FontWeight="Bold" Foreground="#DC2626" />
+                        <TextBlock x:Name="ErrorText" FontSize="12" Foreground="#B91C1C"
+                                   TextWrapping="Wrap" Margin="0,6,0,0" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </Grid>
+
+        <!-- 底部按钮 -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button x:Name="SkipBtn" Content="跳过，手动配置" Style="{StaticResource BtnSecondary}"
+                    Margin="0,0,10,0" Click="OnSkip" />
+            <Button x:Name="BackBtn" Content="上一步" Style="{StaticResource BtnSecondary}"
+                    Margin="0,0,10,0" Click="OnBack" Visibility="Collapsed" />
+            <Button x:Name="NextBtn" Content="下一步" Style="{StaticResource BtnPrimary}"
+                    Click="OnNext" />
+        </StackPanel>
+    </Grid>
+</Window>

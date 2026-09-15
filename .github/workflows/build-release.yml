@@ -80,7 +80,8 @@ jobs:
           Write-Host "=== 下载 libimobiledevice-win32 ==="
           $libiApi = "https://api.github.com/repos/libimobiledevice-win32/imobiledevice-net/releases/latest"
           $release = Invoke-RestMethod -Uri $libiApi -UseBasicParsing -TimeoutSec 30
-          $asset = $release.assets | Where-Object { $_.name -like "*win64.zip" } | Select-Object -First 1
+          $asset = $release.assets | Where-Object { $_.name -like "*win-x64.zip" } | Select-Object -First 1
+          if (-not $asset) { $asset = $release.assets | Where-Object { $_.name -like "*win64*" } | Select-Object -First 1 }
           if (-not $asset) { throw "libimobiledevice asset not found" }
           Write-Host "  URL: $($asset.browser_download_url)"
           curl.exe -L --silent --fail -o "$dlDir\libi.zip" $asset.browser_download_url
@@ -94,7 +95,7 @@ jobs:
           Write-Host "=== 下载 zsign ==="
           $zsignApi = "https://api.github.com/repos/zhlynn/zsign/releases/latest"
           $zsignRelease = Invoke-RestMethod -Uri $zsignApi -UseBasicParsing -TimeoutSec 30
-          $zsignAsset = $zsignRelease.assets | Where-Object { $_.name -like "*windows*" -or $_.name -like "*win64*" } | Select-Object -First 1
+          $zsignAsset = $zsignRelease.assets | Where-Object { $_.name -like "*windows-x64*" -or $_.name -like "*win-x64*" } | Select-Object -First 1
           if (-not $zsignAsset) { $zsignAsset = $zsignRelease.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1 }
           if (-not $zsignAsset) { throw "zsign asset not found" }
           Write-Host "  URL: $($zsignAsset.browser_download_url)"

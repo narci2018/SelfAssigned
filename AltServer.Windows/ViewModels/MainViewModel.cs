@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -326,14 +327,27 @@ public class MainViewModel : ObservableObject
         try
         {
             var devices = GetAllDevices();
-            Devices.Clear();
-            foreach (var d in devices) Devices.Add(d);
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher is not null && !dispatcher.CheckAccess())
+            {
+                dispatcher.Invoke(() => ReplaceDevices(devices));
+            }
+            else
+            {
+                ReplaceDevices(devices);
+            }
             LogService.Info($"已刷新设备列表 ({devices.Count} 台)");
         }
         catch (Exception ex)
         {
             LogService.Error($"刷新设备失败: {ex.Message}");
         }
+    }
+
+    private void ReplaceDevices(List<Device> devices)
+    {
+        Devices.Clear();
+        foreach (var d in devices) Devices.Add(d);
     }
 
     public async Task<bool> PairDeviceAsync()
@@ -368,7 +382,15 @@ public class MainViewModel : ObservableObject
     private void LoadDeviceApp()
     {
         var device = SelectedDevice;
-        InstalledApps.Clear();
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is not null && !dispatcher.CheckAccess())
+        {
+            dispatcher.Invoke(() => InstalledApps.Clear());
+        }
+        else
+        {
+            InstalledApps.Clear();
+        }
         DeviceName = device?.Name ?? string.Empty;
         OsVersion = device?.OsVersion ?? string.Empty;
 

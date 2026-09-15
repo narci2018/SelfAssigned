@@ -383,5 +383,6 @@ public class HttpJsonResponse
 
 public static class AppVersion
 {
-    public const string Version = "1.0.0";
+    public static string Version { get; } =
+        typeof(AppVersion).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
 }

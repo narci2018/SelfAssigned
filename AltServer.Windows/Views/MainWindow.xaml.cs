@@ -89,7 +89,8 @@ public partial class MainWindow : Window
 
     private async void OnRefreshDevices(object sender, RoutedEventArgs e)
     {
-        await Task.Run(() => ViewModel.RefreshDevices());
+        var vm = ViewModel;
+        await Task.Run(() => vm.RefreshDevices());
     }
 
     private void OnRefreshTools(object sender, RoutedEventArgs e)

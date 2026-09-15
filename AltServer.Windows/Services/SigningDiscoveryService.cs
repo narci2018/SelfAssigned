@@ -1,5 +1,6 @@
 using System.IO;
 using System.Security.Cryptography.X509Certificates;
+using System.Security.Cryptography;
 
 namespace AltServer.Windows.Services;
 
@@ -33,9 +34,10 @@ public class SigningDiscoveryService
                 if (!cert.HasPrivateKey) continue;
                 if (cert.NotAfter < DateTime.Now) continue;
 
-                var isCodeSigning = cert.EnhancedKeyUsageList.Any(u =>
-                    u.FriendlyName.Contains("Code Signing") ||
-                    u.Oid?.Value == "1.3.6.1.5.5.7.3.3");
+                var isCodeSigning = cert.Extensions.OfType<X509EnhancedKeyUsageExtension>()
+                    .Any(ext => ext.EnhancedKeyUsages.Cast<Oid>()
+                        .Any(u => u.FriendlyName.Contains("Code Signing") ||
+                                  u.Value == "1.3.6.1.5.5.7.3.3"));
 
                 if (!isCodeSigning) continue;
 

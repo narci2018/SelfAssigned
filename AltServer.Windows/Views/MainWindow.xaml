@@ -299,24 +299,29 @@
 
                         <DockPanel Grid.Row="0" Margin="0,0,0,8">
                             <TextBlock Text="日志" Style="{StaticResource HeaderText}" />
-                            <Button DockPanel.Dock="Right" Content="清空" FontSize="12" Padding="8,4"
-                                    Click="OnClearLogs" />
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                <Button Content="复制全部" FontSize="12" Padding="8,4"
+                                        Click="OnCopyAllLogs" Margin="0,0,8,0" />
+                                <Button Content="清空" FontSize="12" Padding="8,4"
+                                        Click="OnClearLogs" />
+                            </StackPanel>
                         </DockPanel>
 
                         <ListBox Grid.Row="1" ItemsSource="{Binding LogEntries}" BorderThickness="0"
                                  Background="#0F172A" ScrollViewer.VerticalScrollBarVisibility="Auto"
                                  Foreground="White" FontFamily="Consolas" FontSize="12">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" Foreground="White"
+                                               FontFamily="Consolas" FontSize="12"
+                                               IsTextSelectionEnabled="True" />
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
                             <ListBox.ItemContainerStyle>
                                 <Style TargetType="ListBoxItem">
                                     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                                     <Setter Property="Background" Value="#0F172A" />
-                                    <Setter Property="Template">
-                                        <Setter.Value>
-                                            <ControlTemplate TargetType="ListBoxItem">
-                                                <ContentPresenter Margin="4,1" />
-                                            </ControlTemplate>
-                                        </Setter.Value>
-                                    </Setter>
+                                    <Setter Property="BorderThickness" Value="0" />
                                 </Style>
                             </ListBox.ItemContainerStyle>
                         </ListBox>

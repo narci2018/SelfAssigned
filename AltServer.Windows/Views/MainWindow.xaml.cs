@@ -177,6 +177,16 @@ public partial class MainWindow : Window
         _ = ViewModel.RefreshAllAsync();
     }
 
+    private void OnCopyAllLogs(object sender, RoutedEventArgs e)
+    {
+        var text = string.Join(Environment.NewLine, ViewModel.LogEntries);
+        if (!string.IsNullOrEmpty(text))
+        {
+            System.Windows.Clipboard.SetText(text);
+            LogService.Info("日志已复制到剪贴板");
+        }
+    }
+
     private void OnClearLogs(object sender, RoutedEventArgs e)
     {
         ViewModel.LogEntries.Clear();

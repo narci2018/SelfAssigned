@@ -61,13 +61,6 @@
 			path = Resources;
 			sourceTree = "<group>";
 		};
-		AA0000040000000000000003 {
-			isa = PBXGroup;
-			children = (
-			);
-			path = AltStoreUITests;
-			sourceTree = "<group>";
-		};
 		AA0000040000000000000004 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -331,7 +324,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = "$(SRCROOT)/AltStore/Info.plist";
+				INFOPLIST_FILE = "$(SRCROOT)/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = AltStore;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -361,7 +354,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = "$(SRCROOT)/AltStore/Info.plist";
+				INFOPLIST_FILE = "$(SRCROOT)/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = AltStore;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

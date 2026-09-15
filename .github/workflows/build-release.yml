@@ -109,36 +109,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js (for fastlane)
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install Fastlane
-        run: |
-          gem install fastlane
-          
       - name: Build AltStore IPA
         run: |
-          # Build using xcodebuild
+          mkdir -p build
+
+          # CI 没有开发者证书,禁用签名;AltServer 安装时会用用户的 Apple ID 重新签名
           xcodebuild -project AltStore/AltStore.xcodeproj \
             -scheme AltStore \
             -configuration Release \
             -archivePath build/AltStore.xcarchive \
             -destination 'generic/platform=iOS' \
-            archive
-            
-          # Export IPA
-          xcodebuild -exportArchive \
-            -archivePath build/AltStore.xcarchive \
-            -exportOptionsPlist AltStore/ExportOptions.plist \
-            -exportPath build/AltStore
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            VALIDATE_PRODUCT=NO
+
+          # 将 .app 直接打包为 IPA
+          mkdir -p build/AltStore/Payload
+          cp -R build/AltStore.xcarchive/Products/Applications/AltStore.app build/AltStore/Payload/
+          (cd build/AltStore && zip -r ../AltStore.ipa Payload)
+          ls -la build/AltStore.ipa
           
       - name: Upload AltStore IPA
         uses: actions/upload-artifact@v4
         with:
           name: AltStore-iOS
-          path: build/AltStore/*.ipa
+          path: build/AltStore.ipa
 
   # ========================================
   # AltStore PAL (EU Alternative Marketplace)
@@ -152,23 +148,29 @@ jobs:
 
       - name: Build AltStore PAL
         run: |
+          mkdir -p build
+
+          # PAL 与标准版共用同一 target,禁用签名后打包为独立 IPA
           xcodebuild -project AltStore/AltStore.xcodeproj \
-            -scheme AltStore-PAL \
+            -scheme AltStore \
             -configuration Release \
             -archivePath build/AltStore-PAL.xcarchive \
             -destination 'generic/platform=iOS' \
-            archive
-            
-          xcodebuild -exportArchive \
-            -archivePath build/AltStore-PAL.xcarchive \
-            -exportOptionsPlist AltStore/ExportOptions-PAL.plist \
-            -exportPath build/AltStore-PAL
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            VALIDATE_PRODUCT=NO
+
+          mkdir -p build/AltStore-PAL/Payload
+          cp -R build/AltStore-PAL.xcarchive/Products/Applications/AltStore.app build/AltStore-PAL/Payload/
+          (cd build/AltStore-PAL && zip -r ../AltStore-PAL.ipa Payload)
+          ls -la build/AltStore-PAL.ipa
           
       - name: Upload AltStore PAL IPA
         uses: actions/upload-artifact@v4
         with:
           name: AltStore-PAL-iOS
-          path: build/AltStore-PAL/*.ipa
+          path: build/AltStore-PAL.ipa
 
   # ========================================
   # 创建 GitHub Release
@@ -248,8 +250,8 @@ jobs:
           files: |
             artifacts/AltServer-macOS/AltServer.dmg
             artifacts/AltServer-Windows/AltServer-Windows.zip
-            artifacts/AltStore-iOS/*.ipa
-            artifacts/AltStore-PAL-iOS/*.ipa
+            artifacts/AltStore-iOS/AltStore.ipa
+            artifacts/AltStore-PAL-iOS/AltStore-PAL.ipa
           draft: false
           prerelease: false
           generate_release_notes: true

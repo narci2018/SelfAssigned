@@ -312,9 +312,11 @@
                                  Foreground="White" FontFamily="Consolas" FontSize="12">
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
-                                    <TextBlock Text="{Binding}" Foreground="White"
-                                               FontFamily="Consolas" FontSize="12"
-                                               IsTextSelectionEnabled="True" />
+                                    <TextBox Text="{Binding}" Foreground="White"
+                                             FontFamily="Consolas" FontSize="12"
+                                             IsReadOnly="True" IsTextSelectionEnabled="True"
+                                             BorderThickness="0" Background="Transparent"
+                                             Padding="0" MinHeight="0" />
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                             <ListBox.ItemContainerStyle>
@@ -322,6 +324,7 @@
                                     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                                     <Setter Property="Background" Value="#0F172A" />
                                     <Setter Property="BorderThickness" Value="0" />
+                                    <Setter Property="Padding" Value="0" />
                                 </Style>
                             </ListBox.ItemContainerStyle>
                         </ListBox>

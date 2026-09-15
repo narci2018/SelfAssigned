@@ -81,7 +81,7 @@ public class HttpServer : IDisposable
                 timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
 
                 // 读取HTTP请求
-                var request = await ReadRequestAsync(stream, timeoutCts.Token);
+                var request = ReadRequestAsync(stream, timeoutCts.Token);
                 if (request is null) return;
 
                 LogService.Info($"{request.Method} {request.Path}");

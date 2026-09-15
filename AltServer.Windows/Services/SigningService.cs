@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 using System.Text;
 
 namespace AltServer.Windows.Services;
@@ -135,9 +136,12 @@ public class SigningService
             if (end < 0) return null;
 
             var dateStr = text[start..end];
-            return DateTime.TryParse(dateStr, null, System.Globalization.DateTimeStyles.AdjustToUniversal)
-                ? DateTime.Parse(dateStr).ToLocalTime()
-                : null;
+            if (DateTime.TryParse(dateStr, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AdjustToUniversal, out var utcDate))
+            {
+                return utcDate.ToLocalTime();
+            }
+            return null;
         }
         catch
         {

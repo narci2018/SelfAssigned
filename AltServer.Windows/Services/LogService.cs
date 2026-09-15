@@ -1,3 +1,5 @@
+using System.IO;
+
 namespace AltServer.Windows.Services;
 
 /// <summary>

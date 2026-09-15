@@ -11,8 +11,8 @@ public class RunningStateBrushConverter : IValueConverter
     {
         var running = value is true;
         return running
-            ? new SolidColorBrush(Color.FromRgb(0x22, 0xC5, 0x5E)) // 绿
-            : new SolidColorBrush(Color.FromRgb(0xEF, 0x44, 0x44)); // 红
+            ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x22, 0xC5, 0x5E)) // 绿
+            : new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xEF, 0x44, 0x44)); // 红
     }
 
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)

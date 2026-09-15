@@ -13,6 +13,30 @@ public struct Certificate: Codable, Identifiable, Sendable {
     public let privateKeyData: Data
     public let machineId: String?
 
+    public init(
+        id: UUID,
+        commonName: String,
+        teamName: String,
+        teamIdentifier: String,
+        serialNumber: String,
+        notBefore: Date,
+        notAfter: Date,
+        certificateData: Data,
+        privateKeyData: Data,
+        machineId: String?
+    ) {
+        self.id = id
+        self.commonName = commonName
+        self.teamName = teamName
+        self.teamIdentifier = teamIdentifier
+        self.serialNumber = serialNumber
+        self.notBefore = notBefore
+        self.notAfter = notAfter
+        self.certificateData = certificateData
+        self.privateKeyData = privateKeyData
+        self.machineId = machineId
+    }
+
     public var isExpired: Bool {
         Date() > notAfter
     }

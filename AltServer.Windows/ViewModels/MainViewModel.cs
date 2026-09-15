@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Windows;
@@ -233,7 +234,7 @@ public class MainViewModel : ObservableObject
 
     // MARK: - 工具检测
 
-    private void VerifyTools()
+    public void VerifyTools()
     {
         var toolsDir = _settings.ResolveToolsDir();
         var required = new[] { "idevice_id.exe", "ideviceinfo.exe", "ideviceinstaller.exe", "idevicepair.exe", "zsign.exe" };
@@ -625,7 +626,7 @@ public class MainViewModel : ObservableObject
 
     private static string JsonElement_GetString(JsonElement element, string property)
     {
-        if (element.TryGetProperty(property, out var value) && value.ValueKind == JsonElement.ValueKind.String)
+        if (element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String)
         {
             return value.GetString() ?? string.Empty;
         }

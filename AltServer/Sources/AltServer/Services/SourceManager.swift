@@ -190,6 +190,7 @@ public class SourceManager: @unchecked Sendable {
 private struct SourceData: Codable {
     let apps: [SourceAppData]
     let news: [NewsData]?
+    let tintColor: String?
 
     struct SourceAppData: Codable {
         let name: String
@@ -201,7 +202,7 @@ private struct SourceData: Codable {
         let tintColor: String?
         let localizedDescription: String
         let screenshots: [URL]?
-        let appPermissions: SourceApp.AppPermissions?
+        let appPermissions: SourceManager.SourceApp.AppPermissions?
     }
 
     struct NewsData: Codable {

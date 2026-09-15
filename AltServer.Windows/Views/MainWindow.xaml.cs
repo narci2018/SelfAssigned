@@ -26,7 +26,7 @@ public partial class MainWindow : Window
         _trayIcon = new NotifyIcon
         {
             Text = "AltServer - iOS应用侧载服务器",
-            Icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath) ?? SystemIcons.Application,
+            Icon = System.Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath) ?? System.Drawing.SystemIcons.Application,
             Visible = true
         };
 
@@ -99,7 +99,7 @@ public partial class MainWindow : Window
 
     private void OnBrowseP12(object sender, RoutedEventArgs e)
     {
-        var dlg = new OpenFileDialog
+        var dlg = new Microsoft.Win32.OpenFileDialog
         {
             Title = "选择证书文件 (.p12)",
             Filter = "证书文件 (*.p12)|*.p12|所有文件 (*.*)|*.*"
@@ -116,7 +116,7 @@ public partial class MainWindow : Window
 
     private void OnBrowseProvision(object sender, RoutedEventArgs e)
     {
-        var dlg = new OpenFileDialog
+        var dlg = new Microsoft.Win32.OpenFileDialog
         {
             Title = "选择配置文件 (.mobileprovision)",
             Filter = "配置文件 (*.mobileprovision)|*.mobileprovision|所有文件 (*.*)|*.*"
@@ -135,7 +135,7 @@ public partial class MainWindow : Window
 
     private async void OnInstallIpa(object sender, RoutedEventArgs e)
     {
-        var dlg = new OpenFileDialog
+        var dlg = new Microsoft.Win32.OpenFileDialog
         {
             Title = "选择IPA文件",
             Filter = "IPA文件 (*.ipa)|*.ipa|所有文件 (*.*)|*.*"

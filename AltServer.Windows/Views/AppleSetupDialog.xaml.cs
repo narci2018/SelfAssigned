@@ -50,7 +50,8 @@ public partial class AppleSetupDialog : Window
             StatusText.Text = "正在检测设备...";
             await Task.Delay(500);
 
-            var deviceService = new DeviceService(Path.Combine(_dataDir, ".."));
+            var settings = new SettingsService();
+            var deviceService = new DeviceService(settings.ResolveToolsDir());
             var devices = await Task.Run(() => deviceService.ListDevices());
 
             if (devices.Count == 0)

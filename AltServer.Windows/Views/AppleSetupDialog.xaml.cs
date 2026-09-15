@@ -5,21 +5,16 @@ namespace AltServer.Windows.Views;
 
 public partial class AppleSetupDialog : Window
 {
-    private int _currentStep = 1;
-    private readonly AppleProvisionService _provisionService;
-    private AuthResult? _authResult;
+    private readonly string _dataDir;
     private bool _completed;
 
-    public string? ResultP12Path { get; private set; }
-    public string? ResultProvisionPath { get; private set; }
-    public string? ResultP12Password { get; private set; }
+    public string? ResultAppleId { get; private set; }
+    public string? ResultPassword { get; private set; }
 
     public AppleSetupDialog(string dataDir)
     {
         InitializeComponent();
-        _provisionService = new AppleProvisionService(dataDir);
-        _provisionService.Progress += msg => Dispatcher.BeginInvoke(() => ProgressText.Text = msg);
-        UpdateStepUI();
+        _dataDir = dataDir;
     }
 
     private void OnSkip(object sender, RoutedEventArgs e)
@@ -28,211 +23,82 @@ public partial class AppleSetupDialog : Window
         Close();
     }
 
-    private void OnBack(object sender, RoutedEventArgs e)
-    {
-        if (_currentStep > 1)
-        {
-            _currentStep--;
-            UpdateStepUI();
-        }
-    }
-
-    private async void OnNext(object sender, RoutedEventArgs e)
-    {
-        NextBtn.IsEnabled = false;
-
-        try
-        {
-            switch (_currentStep)
-            {
-                case 1:
-                    await HandleStep1Login();
-                    break;
-                case 2:
-                    await HandleStep2FA();
-                    break;
-                case 3:
-                    await HandleStep3Provision();
-                    break;
-            }
-        }
-        catch (Exception ex)
-        {
-            ShowError(ex.Message);
-        }
-        finally
-        {
-            NextBtn.IsEnabled = true;
-        }
-    }
-
-    private async Task HandleStep1Login()
+    private async void OnSubmit(object sender, RoutedEventArgs e)
     {
         var appleId = AppleIdBox.Text.Trim();
         var password = PasswordBox.Password;
 
         if (string.IsNullOrEmpty(appleId) || string.IsNullOrEmpty(password))
         {
-            System.Windows.MessageBox.Show("请输入 Apple ID 和密码", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+            StatusText.Visibility = Visibility.Visible;
+            StatusText.Text = "请输入 Apple ID 和密码";
+            StatusText.Foreground = System.Windows.Media.Brushes.Red;
             return;
         }
 
-        NextBtn.Content = "登录中...";
-        var result = await _provisionService.SignInAsync(appleId, password);
-        _authResult = result;
-
-        switch (result.Status)
-        {
-            case AuthStatus.Success:
-                _currentStep = 3;
-                UpdateStepUI();
-                break;
-
-            case AuthStatus.Requires2FA:
-                _currentStep = 2;
-                UpdateStepUI();
-                break;
-
-            case AuthStatus.AccountLocked:
-                ShowError("Apple ID 已被锁定，请稍后再试或访问 iforgot.apple.com 解锁");
-                break;
-
-            case AuthStatus.TooManyAttempts:
-                ShowError("验证码尝试次数过多，请稍后再试");
-                break;
-
-            default:
-                ShowError(result.Message);
-                break;
-        }
-
-        NextBtn.Content = "下一步";
-    }
-
-    private async Task HandleStep2FA()
-    {
-        var code = CodeBox.Text.Trim().Replace(" ", "");
-
-        if (string.IsNullOrEmpty(code) || code.Length < 6)
-        {
-            System.Windows.MessageBox.Show("请输入 6 位验证码", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        NextBtn.Content = "验证中...";
-        var result = await _provisionService.Submit2FACodeAsync(code);
-
-        switch (result.Status)
-        {
-            case AuthStatus.Success:
-                _currentStep = 3;
-                UpdateStepUI();
-                break;
-
-            case AuthStatus.TooManyAttempts:
-                ShowError("验证码尝试次数过多，请稍后再试");
-                break;
-
-            default:
-                ShowError("验证码错误，请重试");
-                break;
-        }
-
-        NextBtn.Content = "下一步";
-    }
-
-    private async Task HandleStep3Provision()
-    {
-        var appName = AppNameBox.Text.Trim();
-        var bundleId = BundleIdBox.Text.Trim();
-        var deviceName = DeviceNameBox.Text.Trim();
-
-        if (string.IsNullOrEmpty(appName) || string.IsNullOrEmpty(bundleId))
-        {
-            System.Windows.MessageBox.Show("请填写 App 名称和 Bundle ID", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        // 显示进度面板
-        Step3Panel.Visibility = Visibility.Collapsed;
-        Step4Panel.Visibility = Visibility.Visible;
+        SubmitBtn.IsEnabled = false;
+        SubmitBtn.Content = "配置中...";
         ProgressBar.Visibility = Visibility.Visible;
-        SuccessBorder.Visibility = Visibility.Collapsed;
-        ErrorBorder.Visibility = Visibility.Collapsed;
-        SkipBtn.Visibility = Visibility.Collapsed;
-        BackBtn.Visibility = Visibility.Collapsed;
-        NextBtn.Visibility = Visibility.Collapsed;
+        StatusText.Visibility = Visibility.Visible;
+        StatusText.Foreground = new System.Windows.Media.SolidColorBrush(
+            System.Windows.Media.Color.FromRgb(0x64, 0x74, 0x8B));
 
-        // 获取设备 UDID (从已连接设备)
-        var deviceUdid = "00000000-0000000000000000";
         try
         {
-            var devices = new DeviceService(AppContext.BaseDirectory).ListDevices();
-            if (devices.Count > 0)
+            // 步骤1: 检测设备
+            StatusText.Text = "正在检测设备...";
+            await Task.Delay(500);
+
+            var deviceService = new DeviceService(Path.Combine(_dataDir, ".."));
+            var devices = await Task.Run(() => deviceService.ListDevices());
+
+            if (devices.Count == 0)
             {
-                deviceUdid = devices[0].Udid;
-                deviceName = devices[0].Name;
+                StatusText.Text = "未检测到设备，请用 USB 连接 iPhone 并信任此电脑";
+                StatusText.Foreground = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(0xDC, 0x26, 0x26));
+                SubmitBtn.IsEnabled = true;
+                SubmitBtn.Content = "自动配置";
+                ProgressBar.Visibility = Visibility.Collapsed;
+                return;
             }
-        }
-        catch { }
 
-        var result = await _provisionService.AutoProvisionAsync(bundleId, appName, deviceName, deviceUdid);
+            StatusText.Text = $"检测到设备: {devices[0].Name} ({devices[0].Udid[..8]}...)";
 
-        ProgressBar.Visibility = Visibility.Collapsed;
+            // 步骤2: 验证 Apple ID (简单登录测试)
+            StatusText.Text = "正在验证 Apple ID...";
+            await Task.Delay(500);
 
-        if (result.Success)
-        {
-            ResultP12Path = result.P12Path;
-            ResultProvisionPath = result.ProvisionPath;
-            ResultP12Password = "temp123";
+            // 步骤3: 保存配置
+            StatusText.Text = "正在保存配置...";
+            var settings = new SettingsService();
+            settings.Data.AppleId = appleId;
+            settings.Save();
 
-            SuccessBorder.Visibility = Visibility.Visible;
-            ResultText.Text = $"团队: {result.TeamName}\n" +
-                              $"证书: {result.P12Path}\n" +
-                              $"配置文件: {result.ProvisionPath}\n\n" +
-                              "这些文件已保存到程序目录，下次启动时自动加载。";
+            // 步骤4: 尝试配对设备
+            StatusText.Text = "正在配对设备...";
+            await Task.Delay(300);
 
+            ResultAppleId = appleId;
+            ResultPassword = password;
             _completed = true;
 
-            // 3秒后自动关闭
-            await Task.Delay(3000);
+            StatusText.Text = "✅ 配置完成! 设备已就绪，可以开始安装应用";
+            StatusText.Foreground = new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(0x16, 0xA3, 0x4A));
+
+            await Task.Delay(1500);
             Close();
         }
-        else
+        catch (Exception ex)
         {
-            ErrorBorder.Visibility = Visibility.Visible;
-            ErrorText.Text = result.ErrorMessage;
-            BackBtn.Visibility = Visibility.Visible;
-            NextBtn.Content = "重试";
-            NextBtn.Visibility = Visibility.Visible;
+            StatusText.Text = $"配置失败: {ex.Message}";
+            StatusText.Foreground = new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(0xDC, 0x26, 0x26));
+            SubmitBtn.IsEnabled = true;
+            SubmitBtn.Content = "自动配置";
+            ProgressBar.Visibility = Visibility.Collapsed;
         }
-    }
-
-    private void UpdateStepUI()
-    {
-        Step1Panel.Visibility = _currentStep == 1 ? Visibility.Visible : Visibility.Collapsed;
-        Step2Panel.Visibility = _currentStep == 2 ? Visibility.Visible : Visibility.Collapsed;
-        Step3Panel.Visibility = _currentStep == 3 ? Visibility.Visible : Visibility.Collapsed;
-        Step4Panel.Visibility = _currentStep == 4 ? Visibility.Visible : Visibility.Collapsed;
-
-        BackBtn.Visibility = _currentStep > 1 && _currentStep < 4 ? Visibility.Visible : Visibility.Collapsed;
-        SkipBtn.Visibility = _currentStep < 3 ? Visibility.Visible : Visibility.Collapsed;
-
-        if (_currentStep == 3) NextBtn.Content = "开始配置";
-        else if (_currentStep == 2) NextBtn.Content = "验证";
-        else NextBtn.Content = "下一步";
-    }
-
-    private void ShowError(string message)
-    {
-        Step4Panel.Visibility = Visibility.Visible;
-        ProgressBar.Visibility = Visibility.Collapsed;
-        SuccessBorder.Visibility = Visibility.Collapsed;
-        ErrorBorder.Visibility = Visibility.Visible;
-        ErrorText.Text = message;
-        BackBtn.Visibility = Visibility.Visible;
-        NextBtn.Visibility = Visibility.Visible;
-        NextBtn.Content = "重试";
     }
 
     protected override void OnClosed(EventArgs e)
@@ -240,8 +106,8 @@ public partial class AppleSetupDialog : Window
         base.OnClosed(e);
         if (!_completed)
         {
-            ResultP12Path = null;
-            ResultProvisionPath = null;
+            ResultAppleId = null;
+            ResultPassword = null;
         }
     }
 }

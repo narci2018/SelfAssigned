@@ -42,15 +42,9 @@ public partial class MainWindow : Window
 
         dialog.ShowDialog();
 
-        if (dialog.ResultP12Path is not null)
+        if (dialog.ResultAppleId is not null)
         {
-            settings.Data.P12Path = dialog.ResultP12Path;
-            settings.Data.P12Password = dialog.ResultP12Password ?? "";
-        }
-
-        if (dialog.ResultProvisionPath is not null)
-        {
-            settings.Data.MobileProvisionPath = dialog.ResultProvisionPath;
+            settings.Data.AppleId = dialog.ResultAppleId;
         }
 
         settings.Data.SetupCompleted = true;

@@ -72,7 +72,7 @@ class ServerManager: ObservableObject {
     // MARK: - API Communication
 
     func fetchServerStatus() {
-        sendRequest(path: "/status") { [weak self] (result: Result<ServerStatus, Error>) in
+        sendDecodableRequest(path: "/status") { [weak self] (result: Result<ServerStatus, Error>) in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let status):
@@ -85,7 +85,7 @@ class ServerManager: ObservableObject {
     }
 
     func fetchInstalledApps(completion: @escaping ([RemoteInstalledApp]) -> Void) {
-        sendRequest(path: "/apps") { result in
+        sendDecodableRequest(path: "/apps") { (result: Result<AppsResponse, Error>) in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let response):
@@ -119,7 +119,7 @@ class ServerManager: ObservableObject {
 
     // MARK: - Private Networking
 
-    private func sendRequest<T: Decodable>(path: String, method: HTTPMethod = .get, body: [String: Any]? = nil, completion: @escaping (Result<T, Error>) -> Void) {
+    private func sendRequest(path: String, method: HTTPMethod = .get, body: [String: Any]? = nil, completion: @escaping (Result<Data, Error>) -> Void) {
         guard let connection = connection else {
             completion(.failure(ServerError.notConnected))
             return
@@ -151,14 +151,25 @@ class ServerManager: ObservableObject {
                     return
                 }
 
+                completion(.success(body))
+            }
+        })
+    }
+
+    private func sendDecodableRequest<T: Decodable>(path: String, method: HTTPMethod = .get, body: [String: Any]? = nil, completion: @escaping (Result<T, Error>) -> Void) {
+        sendRequest(path: path, method: method, body: body) { result in
+            switch result {
+            case .success(let responseBody):
                 do {
-                    let decoded = try JSONDecoder().decode(T.self, from: body)
+                    let decoded = try JSONDecoder().decode(T.self, from: responseBody)
                     completion(.success(decoded))
                 } catch {
                     completion(.failure(error))
                 }
+            case .failure(let error):
+                completion(.failure(error))
             }
-        })
+        }
     }
 }
 

@@ -135,9 +135,7 @@ public class AppleProvisionService
             HashAlgorithmName.SHA256,
             RSASignaturePadding.Pkcs1);
 
-        var serialNumber = new byte[20];
-        RandomNumberGenerator.Fill(serialNumber);
-        request.CertificateSerialNumber = serialNumber;
+        // Serial number is set automatically by the CA
 
         var csrBytes = request.CreateSigningRequest();
         var csrPem = $"-----BEGIN CERTIFICATE REQUEST-----\n" +

@@ -73,7 +73,7 @@ public partial class AppleSetupDialog : Window
 
         if (string.IsNullOrEmpty(appleId) || string.IsNullOrEmpty(password))
         {
-            MessageBox.Show("请输入 Apple ID 和密码", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+            System.Windows.MessageBox.Show("请输入 Apple ID 和密码", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
@@ -115,7 +115,7 @@ public partial class AppleSetupDialog : Window
 
         if (string.IsNullOrEmpty(code) || code.Length < 6)
         {
-            MessageBox.Show("请输入 6 位验证码", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+            System.Windows.MessageBox.Show("请输入 6 位验证码", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
@@ -149,7 +149,7 @@ public partial class AppleSetupDialog : Window
 
         if (string.IsNullOrEmpty(appName) || string.IsNullOrEmpty(bundleId))
         {
-            MessageBox.Show("请填写 App 名称和 Bundle ID", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+            System.Windows.MessageBox.Show("请填写 App 名称和 Bundle ID", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 

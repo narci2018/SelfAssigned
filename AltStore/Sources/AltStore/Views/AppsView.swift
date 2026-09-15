@@ -120,7 +120,7 @@ struct AppsView: View {
         defer { appState.isRefreshing = false }
 
         await withCheckedContinuation { continuation in
-            serverManager.refreshApps { result in
+            serverManager.refreshApps { _ in
                 appState.lastRefreshDate = Date()
                 continuation.resume()
             }
@@ -139,7 +139,7 @@ struct InstalledAppRow: View {
             AsyncImage(url: app.iconURL) { image in
                 image
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
+                    .scaledToFit()
             } placeholder: {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color.blue.gradient)
@@ -223,7 +223,7 @@ struct AppDetailView: View {
                         AsyncImage(url: app.iconURL) { image in
                             image
                                 .resizable()
-                                .aspectRatio(contentMode: .fit)
+                                .scaledToFit()
                         } placeholder: {
                             RoundedRectangle(cornerRadius: 16)
                                 .fill(Color.blue.gradient)

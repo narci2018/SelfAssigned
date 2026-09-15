@@ -82,7 +82,7 @@ public class AltServerDaemon: LocalServerDelegate {
         case "/certificates":
             return handleListCertificates(request)
         default:
-            return HTTPResponse(statusCode: 404, body: "Not Found".data(using: .utf8))
+            return HTTPResponse(statusCode: 404, body: Data("Not Found".utf8))
         }
     }
 

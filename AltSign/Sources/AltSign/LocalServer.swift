@@ -101,7 +101,7 @@ public class LocalServer: @unchecked Sendable {
 
         let response = delegate.handleRequest(request)
 
-        var responseData = response.serialize()
+        let responseData = response.serialize()
         responseData.withUnsafeBytes { ptr in
             _ = write(socket, ptr.baseAddress!, responseData.count)
         }

@@ -9,7 +9,7 @@ public struct Device: Codable, Identifiable, Sendable {
     public let model: String?
     public let platform: Platform
 
-    public enum DeviceClass: String, Codable {
+    public enum DeviceClass: String, Codable, Sendable {
         case iPhone
         case iPad
         case iPod
@@ -31,7 +31,7 @@ public struct Device: Codable, Identifiable, Sendable {
         }
     }
 
-    public enum Platform: String, Codable {
+    public enum Platform: String, Codable, Sendable {
         case ios
         case watchOS
         case tvOS

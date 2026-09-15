@@ -2,7 +2,7 @@ import Foundation
 import CryptoKit
 
 /// Core IPA signing engine
-public class SigningEngine: Sendable {
+public final class SigningEngine: Sendable {
     private let certificate: Certificate
     private let provisioningProfile: ProvisioningProfile
 
@@ -84,9 +84,10 @@ public class SigningEngine: Sendable {
     private func signAppBundle(at appBundle: URL) throws {
         // Generate entitlements plist
         let entitlementsPlist = generateEntitlementsPlist()
+        let entitlementsData = try PropertyListSerialization.data(fromPropertyList: entitlementsPlist, format: .xml, options: 0)
         let entitlementsPath = FileManager.default.temporaryDirectory
             .appendingPathComponent("entitlements.plist")
-        try entitlementsPlist.write(to: entitlementsPath)
+        try entitlementsData.write(to: entitlementsPath)
         defer { try? FileManager.default.removeItem(at: entitlementsPath) }
 
         // Sign with codesign
@@ -156,9 +157,6 @@ public class SigningEngine: Sendable {
     }
 
     private func repackageIPA(from sourceDir: URL, to outputURL: URL) throws -> URL {
-        // Create Payload directory structure for IPA
-        let payloadDir = sourceDir.appendingPathComponent("Payload")
-
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
         process.arguments = ["-r", "-q", outputURL.path, "Payload"]

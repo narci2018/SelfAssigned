@@ -9,7 +9,7 @@ public struct AppID: Codable, Identifiable, Sendable {
     public let isWildcard: Bool
     public let platform: Platform
 
-    public enum Platform: String, Codable {
+    public enum Platform: String, Codable, Sendable {
         case ios
         case mac
     }

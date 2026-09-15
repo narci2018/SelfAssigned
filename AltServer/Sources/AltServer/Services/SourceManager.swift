@@ -115,11 +115,11 @@ public class SourceManager: @unchecked Sendable {
 
     /// Refresh all sources
     public func refreshAllSources() async {
-        for i in sources.indices {
+        for index in sources.indices {
             do {
-                sources[i] = try await refreshSource(sources[i])
+                sources[index] = try await refreshSource(sources[index])
             } catch {
-                print("[SourceManager] Failed to refresh \(sources[i].name): \(error)")
+                print("[SourceManager] Failed to refresh \(sources[index].name): \(error)")
             }
         }
         saveSources()

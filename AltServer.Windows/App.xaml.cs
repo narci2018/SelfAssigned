@@ -6,7 +6,7 @@ using AltServer.Windows.Views;
 
 namespace AltServer.Windows;
 
-public partial class App : Application
+public partial class App : System.Windows.Application
 {
     private MainViewModel? _viewModel;
     private Mutex? _instanceMutex;
@@ -17,7 +17,7 @@ public partial class App : Application
         _instanceMutex = new Mutex(true, "AltServer.Windows.SingleInstance", out var createdNew);
         if (!createdNew)
         {
-            MessageBox.Show("AltServer 已经在运行中。", "AltServer",
+            System.Windows.MessageBox.Show("AltServer 已经在运行中。", "AltServer",
                 MessageBoxButton.OK, MessageBoxImage.Information);
             Shutdown();
             return;

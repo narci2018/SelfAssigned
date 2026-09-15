@@ -82,8 +82,8 @@ struct SettingsView: View {
 
                 // About Section
                 Section("About") {
-                    LabeledContent("AltStore", value: "v\(AltStoreVersion)")
-                    LabeledContent("Build", value: AltStoreBuild)
+                    LabeledContent("AltStore", value: "v\(altStoreVersion)")
+                    LabeledContent("Build", value: altStoreBuild)
 
                     Button("About AltStore") {
                         showingAbout = true
@@ -188,7 +188,7 @@ struct AboutView: View {
                     .font(.largeTitle)
                     .fontWeight(.bold)
 
-                Text("Version \(AltStoreVersion)")
+                Text("Version \(altStoreVersion)")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
 
@@ -245,8 +245,8 @@ struct FeatureRow: View {
 
 // MARK: - Constants
 
-private let AltStoreVersion = "1.0.0"
-private let AltStoreBuild = "1"
+private let altStoreVersion = "1.0.0"
+private let altStoreBuild = "1"
 
 // MARK: - Preview
 

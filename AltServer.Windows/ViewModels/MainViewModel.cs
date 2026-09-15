@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Threading;
 using AltServer.Windows.Models;
@@ -181,7 +182,7 @@ public class MainViewModel : ObservableObject
         LogService.Initialize();
         LogService.LogReceived += (msg, level) =>
         {
-            Application.Current?.Dispatcher.BeginInvoke(() =>
+            System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
             {
                 if (!string.IsNullOrEmpty(msg))
                 {
@@ -378,7 +379,7 @@ public class MainViewModel : ObservableObject
             try
             {
                 var apps = _devices.ListInstalledApps(device.Udid);
-                Application.Current?.Dispatcher.BeginInvoke(() =>
+                System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
                 {
                     InstalledApps.Clear();
                     foreach (var app in apps)

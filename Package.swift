@@ -11,7 +11,7 @@ let package = Package(
     products: [
         .library(name: "AltSign", targets: ["AltSign"]),
         .library(name: "AltServerCore", targets: ["AltServerCore"]),
-        .executable(name: "AltServer", targets: ["AltServerCLI"]),
+        .executable(name: "AltServer", targets: ["AltServerCLI"])
     ],
     dependencies: [],
     targets: [
@@ -34,6 +34,6 @@ let package = Package(
             name: "AltSignTests",
             dependencies: ["AltSign"],
             path: "AltSign/Tests/AltSignTests"
-        ),
+        )
     ]
 )

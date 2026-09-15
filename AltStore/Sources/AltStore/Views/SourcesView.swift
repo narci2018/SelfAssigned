@@ -192,7 +192,7 @@ struct AvailableAppRow: View {
             AsyncImage(url: app.iconURL) { image in
                 image
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
+                    .scaledToFit()
             } placeholder: {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color.blue.gradient)

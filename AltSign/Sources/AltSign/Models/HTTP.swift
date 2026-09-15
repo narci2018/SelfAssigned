@@ -35,12 +35,12 @@ public struct HTTPRequest: Sendable {
         var headers: [String: String] = [:]
         var bodyStartIndex = lines.count
 
-        for i in 1..<lines.count {
-            if lines[i].isEmpty {
-                bodyStartIndex = i + 1
+        for lineIndex in 1..<lines.count {
+            if lines[lineIndex].isEmpty {
+                bodyStartIndex = lineIndex + 1
                 break
             }
-            let headerParts = lines[i].split(separator: ":", maxSplits: 1)
+            let headerParts = lines[lineIndex].split(separator: ":", maxSplits: 1)
             if headerParts.count == 2 {
                 headers[String(headerParts[0]).lowercased()] = String(headerParts[1]).trimmingCharacters(in: .whitespaces)
             }

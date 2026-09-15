@@ -1,0 +1,51 @@
+# macOS
+.DS_Store
+
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# CocoaPods
+Pods/
+
+# Fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots.html
+fastlane/screenshots/
+fastlane/spec_summary.json
+
+# Signing
+*.cer
+*.p12
+*.mobileprovision
+*.provisionprofile
+*.ipa
+*.dmg
+
+# Secrets
+.env
+.env.local
+*.key
+*.pem
+
+# Logs
+*.log
+
+# Node
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
+
+# IDE
+.idea/
+*.iml
+.vscode/

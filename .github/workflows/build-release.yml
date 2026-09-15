@@ -1,0 +1,266 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
+
+env:
+  DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+
+jobs:
+  # ========================================
+  # macOS AltServer (Swift Package Manager)
+  # ========================================
+  build-altserver-macos:
+    name: Build AltServer (macOS)
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Swift
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: '5.9'
+
+      - name: Build AltServer (macOS)
+        run: |
+          swift build -c release --product AltServerCLI
+          
+      - name: Create AltServer Archive
+        run: |
+          mkdir -p build/AltServer
+          cp .build/release/AltServerCLI build/AltServer/AltServer
+          chmod +x build/AltServer/AltServer
+          
+          # Create DMG
+          hdiutil create -volname "AltServer" -srcfolder build/AltServer -ov -format UDZO build/AltServer.dmg
+          
+      - name: Upload AltServer Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AltServer-macOS
+          path: build/AltServer.dmg
+
+  # ========================================
+  # Windows AltServer (.NET 8 WPF)
+  # ========================================
+  build-altserver-windows:
+    name: Build AltServer (Windows)
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Download Windows Tools
+        shell: pwsh
+        run: |
+          .\scripts\download-windows-tools.ps1 -OutputDir AltServer.Windows\tools
+          
+      - name: Restore NuGet
+        run: dotnet restore AltServer.Windows/AltServer.Windows.csproj
+
+      - name: Build
+        run: dotnet publish AltServer.Windows/AltServer.Windows.csproj -c Release --self-contained true -r win-x64 -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o build/AltServer-Windows
+
+      - name: Create Windows Package
+        shell: pwsh
+        run: |
+          # 将工具目录复制到发布文件夹
+          if (Test-Path AltServer.Windows/tools) {
+            Copy-Item -Path AltServer.Windows/tools -Destination build/AltServer-Windows/tools -Recurse -Force
+          }
+          
+          # 创建ZIP包
+          Compress-Archive -Path build/AltServer-Windows/* -DestinationPath build/AltServer-Windows.zip -Force
+          
+          # 显示输出
+          Get-ChildItem build/AltServer-Windows | Format-Table Name, Length -AutoSize
+          
+      - name: Upload AltServer Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AltServer-Windows
+          path: build/AltServer-Windows.zip
+
+  # ========================================
+  # iOS AltStore IPA
+  # ========================================
+  build-altstore-ios:
+    name: Build AltStore (iOS)
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js (for fastlane)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Fastlane
+        run: |
+          gem install fastlane
+          
+      - name: Build AltStore IPA
+        run: |
+          # Build using xcodebuild
+          xcodebuild -project AltStore/AltStore.xcodeproj \
+            -scheme AltStore \
+            -configuration Release \
+            -archivePath build/AltStore.xcarchive \
+            -destination 'generic/platform=iOS' \
+            archive
+            
+          # Export IPA
+          xcodebuild -exportArchive \
+            -archivePath build/AltStore.xcarchive \
+            -exportOptionsPlist AltStore/ExportOptions.plist \
+            -exportPath build/AltStore
+          
+      - name: Upload AltStore IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: AltStore-iOS
+          path: build/AltStore/*.ipa
+
+  # ========================================
+  # AltStore PAL (EU Alternative Marketplace)
+  # ========================================
+  build-altstore-pal:
+    name: Build AltStore PAL (EU)
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build AltStore PAL
+        run: |
+          xcodebuild -project AltStore/AltStore.xcodeproj \
+            -scheme AltStore-PAL \
+            -configuration Release \
+            -archivePath build/AltStore-PAL.xcarchive \
+            -destination 'generic/platform=iOS' \
+            archive
+            
+          xcodebuild -exportArchive \
+            -archivePath build/AltStore-PAL.xcarchive \
+            -exportOptionsPlist AltStore/ExportOptions-PAL.plist \
+            -exportPath build/AltStore-PAL
+          
+      - name: Upload AltStore PAL IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: AltStore-PAL-iOS
+          path: build/AltStore-PAL/*.ipa
+
+  # ========================================
+  # 创建 GitHub Release
+  # ========================================
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-altserver-macos, build-altserver-windows, build-altstore-ios, build-altstore-pal]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display Artifacts
+        run: |
+          echo "=== 下载的产物 ==="
+          find artifacts -type f | head -20
+          
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: AltStore ${{ github.ref_name }}
+          body: |
+            ## What's New
+            
+            See the [CHANGELOG](CHANGELOG.md) for details.
+            
+            ## Downloads
+            
+            ### AltServer (macOS)
+            - `AltServer.dmg` - macOS server application (Apple Silicon)
+            
+            ### AltServer (Windows)
+            - `AltServer-Windows.zip` - Windows 10/11 server application
+            
+            ### AltStore (iOS)
+            - `AltStore.ipa` - iOS client app
+            
+            ### AltStore PAL (EU)
+            - `AltStore-PAL.ipa` - EU Alternative Marketplace version
+            
+            ## Installation
+            
+            ### macOS
+            1. Mount the DMG
+            2. Drag AltServer to Applications
+            3. Run AltServer
+            
+            ### Windows
+            1. Download `AltServer-Windows.zip`
+            2. Extract to a folder (e.g., `C:\AltServer`)
+            3. Run `AltServer.exe`
+            4. Place libimobiledevice tools in `tools` folder
+            
+            ### AltStore (iOS)
+            1. Open AltServer on your computer
+            2. Connect your iOS device via USB
+            3. Install AltStore using AltServer
+            
+            ## Requirements
+            - macOS 13.0+ or Windows 10+ for AltServer
+            - iOS 16.0+ for AltStore
+            - Xcode 15.0+ for building from source (macOS)
+            - .NET 8.0+ SDK for building from source (Windows)
+            
+            ## Windows Tools
+            
+            For the Windows version, download the required tools:
+            - [libimobiledevice-win32](https://github.com/libimobiledevice-win32/imobiledevice-net/releases) - Device communication
+            - [zsign](https://github.com/zhlynn/zsign/releases) - IPA code signing
+            
+            Or run `.\scripts\download-windows-tools.ps1` to auto-download.
+          files: |
+            artifacts/AltServer-macOS/AltServer.dmg
+            artifacts/AltServer-Windows/AltServer-Windows.zip
+            artifacts/AltStore-iOS/*.ipa
+            artifacts/AltStore-PAL-iOS/*.ipa
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+
+  notify:
+    name: Send Notification
+    runs-on: ubuntu-latest
+    needs: create-release
+    if: success()
+    steps:
+      - name: Send Notification
+        run: |
+          echo "Release published successfully!"
+          echo "Version: ${{ github.ref_name }}"

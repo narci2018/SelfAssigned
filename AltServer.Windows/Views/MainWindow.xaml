@@ -221,7 +221,11 @@
                 <!-- 签名配置 -->
                 <Border Grid.Row="0" Style="{StaticResource SectionCard}" Margin="6,0,0,8">
                     <StackPanel>
-                        <TextBlock Text="签名配置" Style="{StaticResource HeaderText}" Margin="0,0,0,10" />
+                        <DockPanel Margin="0,0,0,10">
+                            <TextBlock Text="签名配置" Style="{StaticResource HeaderText}" />
+                            <Button DockPanel.Dock="Right" Content="🔍 扫描" FontSize="12" Padding="8,4"
+                                    Click="OnScanSigningConfig" />
+                        </DockPanel>
 
                         <Grid Margin="0,0,0,8">
                             <Grid.ColumnDefinitions>
@@ -231,9 +235,15 @@
                             </Grid.ColumnDefinitions>
 
                             <TextBlock Text="证书 (.p12)" VerticalAlignment="Center" />
-                            <TextBox Grid.Column="1" Text="{Binding P12Path, UpdateSourceTrigger=PropertyChanged}"
-                                     FontSize="12" Padding="6,4" />
-                            <Button Grid.Column="2" Content="浏览" Margin="6,0,0,0" Padding="10,4"
+                            <ComboBox Grid.Column="1" x:Name="CertificateComboBox"
+                                      FontSize="12" Padding="6,4"
+                                      ItemsSource="{Binding AvailableCertificates}"
+                                      DisplayMemberPath="DisplayName"
+                                      SelectedItem="{Binding SelectedCertificate}"
+                                      IsEditable="True"
+                                      Text="{Binding P12Path, UpdateSourceTrigger=PropertyChanged}"
+                                      Margin="0,0,6,0" />
+                            <Button Grid.Column="2" Content="浏览" Padding="10,4"
                                     Click="OnBrowseP12" />
                         </Grid>
 
@@ -256,9 +266,15 @@
                             </Grid.ColumnDefinitions>
 
                             <TextBlock Text="配置文件" VerticalAlignment="Center" />
-                            <TextBox Grid.Column="1" Text="{Binding MobileProvisionPath, UpdateSourceTrigger=PropertyChanged}"
-                                     FontSize="12" Padding="6,4" />
-                            <Button Grid.Column="2" Content="浏览" Margin="6,0,0,0" Padding="10,4"
+                            <ComboBox Grid.Column="1" x:Name="ProvisionComboBox"
+                                      FontSize="12" Padding="6,4"
+                                      ItemsSource="{Binding AvailableProvisions}"
+                                      DisplayMemberPath="DisplayName"
+                                      SelectedItem="{Binding SelectedProvision}"
+                                      IsEditable="True"
+                                      Text="{Binding MobileProvisionPath, UpdateSourceTrigger=PropertyChanged}"
+                                      Margin="0,0,6,0" />
+                            <Button Grid.Column="2" Content="浏览" Padding="10,4"
                                     Click="OnBrowseProvision" />
                         </Grid>
                     </StackPanel>

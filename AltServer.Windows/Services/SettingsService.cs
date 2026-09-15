@@ -31,8 +31,7 @@ public class SettingsService
 
     public SettingsService()
     {
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        _settingsDir = Path.Combine(appData, "AltServer");
+        _settingsDir = AppContext.BaseDirectory;
         _settingsPath = Path.Combine(_settingsDir, "settings.json");
 
         Directory.CreateDirectory(_settingsDir);

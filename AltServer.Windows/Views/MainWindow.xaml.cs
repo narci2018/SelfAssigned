@@ -17,6 +17,9 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         InitializeTrayIcon();
+
+        // 启动时自动扫描签名配置
+        Loaded += (_, _) => ViewModel.ScanSigningConfig();
     }
 
     // MARK: - 系统托盘
@@ -185,6 +188,11 @@ public partial class MainWindow : Window
             System.Windows.Clipboard.SetText(text);
             LogService.Info("日志已复制到剪贴板");
         }
+    }
+
+    private void OnScanSigningConfig(object sender, RoutedEventArgs e)
+    {
+        ViewModel.ScanSigningConfig();
     }
 
     private void OnClearLogs(object sender, RoutedEventArgs e)

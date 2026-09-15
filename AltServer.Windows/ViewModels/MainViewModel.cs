@@ -20,6 +20,7 @@ public class MainViewModel : ObservableObject
     private readonly SettingsService _settings;
     private readonly DeviceService _devices;
     private readonly SigningService _signing;
+    private readonly SigningDiscoveryService _discovery;
     private readonly HttpServer _server;
 
     private bool _isServerRunning;
@@ -38,6 +39,7 @@ public class MainViewModel : ObservableObject
         _settings = new SettingsService();
         _devices = new DeviceService(_settings.ResolveToolsDir());
         _signing = new SigningService(_settings.ResolveToolsDir());
+        _discovery = new SigningDiscoveryService();
 
         Devices = new ObservableCollection<Device>();
         InstalledApps = new ObservableCollection<InstalledApp>();
@@ -60,6 +62,8 @@ public class MainViewModel : ObservableObject
     public ObservableCollection<Device> Devices { get; }
     public ObservableCollection<InstalledApp> InstalledApps { get; }
     public ObservableCollection<string> LogEntries { get; }
+    public ObservableCollection<CertificateItem> AvailableCertificates { get; } = new();
+    public ObservableCollection<ProvisionItem> AvailableProvisions { get; } = new();
 
     private string _logText = string.Empty;
     public string LogText
@@ -187,6 +191,106 @@ public class MainViewModel : ObservableObject
     }
 
     public string Version => $"v{AppVersion.Version}";
+
+    private CertificateItem? _selectedCertificate;
+    public CertificateItem? SelectedCertificate
+    {
+        get => _selectedCertificate;
+        set
+        {
+            if (SetField(ref _selectedCertificate, value) && value is not null)
+            {
+                P12Path = value.Path;
+            }
+        }
+    }
+
+    private ProvisionItem? _selectedProvision;
+    public ProvisionItem? SelectedProvision
+    {
+        get => _selectedProvision;
+        set
+        {
+            if (SetField(ref _selectedProvision, value) && value is not null)
+            {
+                MobileProvisionPath = value.Path;
+            }
+        }
+    }
+
+    // MARK: - 智能扫描
+
+    public void ScanSigningConfig()
+    {
+        LogService.Info("正在扫描签名配置...");
+
+        AvailableCertificates.Clear();
+        AvailableProvisions.Clear();
+
+        // 扫描证书
+        var certs = _discovery.DiscoverCertificates();
+        var p12s = _discovery.DiscoverP12Files();
+        var allCerts = certs.Concat(p12s).ToList();
+
+        // 去重（按 Subject 或 Path）
+        var seen = new HashSet<string>();
+        foreach (var c in allCerts)
+        {
+            var key = string.IsNullOrEmpty(c.Thumbprint) || c.Thumbprint.Length > 40 ? c.Source : c.Thumbprint;
+            if (!seen.Add(key)) continue;
+            AvailableCertificates.Add(new CertificateItem
+            {
+                DisplayName = $"{c.Subject} ({c.NotAfter:yyyy-MM-dd}) — {Path.GetFileName(c.Source)}",
+                Path = c.Source,
+                Thumbprint = c.Thumbprint,
+                NotAfter = c.NotAfter
+            });
+        }
+
+        // 扫描配置文件
+        var provisions = _discovery.DiscoverProvisionProfiles();
+        var seenPaths = new HashSet<string>();
+        foreach (var p in provisions)
+        {
+            if (!seenPaths.Add(p.Path)) continue;
+            var expiry = p.Expiry < DateTime.MaxValue ? $" 有效至 {p.Expiry:yyyy-MM-dd}" : "";
+            AvailableProvisions.Add(new ProvisionItem
+            {
+                DisplayName = $"{p.Name}{expiry} — {Path.GetFileName(p.Source)}",
+                Path = p.Path,
+                Expiry = p.Expiry
+            });
+        }
+
+        LogService.Info($"扫描完成: 找到 {AvailableCertificates.Count} 个证书, {AvailableProvisions.Count} 个配置文件");
+
+        // 自动选中：如果只有一个且当前为空，自动填入
+        if (AvailableCertificates.Count == 1 && string.IsNullOrEmpty(P12Path))
+        {
+            SelectedCertificate = AvailableCertificates[0];
+            LogService.Info($"自动选中证书: {AvailableCertificates[0].DisplayName}");
+        }
+
+        if (AvailableProvisions.Count == 1 && string.IsNullOrEmpty(MobileProvisionPath))
+        {
+            SelectedProvision = AvailableProvisions[0];
+            LogService.Info($"自动选中配置文件: {AvailableProvisions[0].DisplayName}");
+        }
+
+        // 如果有已保存的路径，尝试匹配选中
+        if (!string.IsNullOrEmpty(P12Path))
+        {
+            var match = AvailableCertificates.FirstOrDefault(c =>
+                c.Path == P12Path || c.Thumbprint == P12Path);
+            if (match is not null) SelectedCertificate = match;
+        }
+
+        if (!string.IsNullOrEmpty(MobileProvisionPath))
+        {
+            var match = AvailableProvisions.FirstOrDefault(p => p.Path == MobileProvisionPath);
+            if (match is not null) SelectedProvision = match;
+        }
+    }
 
     // MARK: - 生命周期
 
@@ -701,4 +805,21 @@ public abstract class ObservableObject : INotifyPropertyChanged
         OnPropertyChanged(propertyName);
         return true;
     }
+}
+
+/// <summary>签名配置项：证书</summary>
+public class CertificateItem
+{
+    public string DisplayName { get; set; } = string.Empty;
+    public string Path { get; set; } = string.Empty;
+    public string Thumbprint { get; set; } = string.Empty;
+    public DateTime NotAfter { get; set; }
+}
+
+/// <summary>签名配置项：配置文件</summary>
+public class ProvisionItem
+{
+    public string DisplayName { get; set; } = string.Empty;
+    public string Path { get; set; } = string.Empty;
+    public DateTime Expiry { get; set; }
 }

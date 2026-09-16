@@ -75,7 +75,6 @@ public partial class AppleSetupDialog : Window
 
             // 步骤3: 注册设备
             StatusText.Text = "步骤 3/5: 注册设备到 Apple...";
-            var teams = await provisionService.GetTeamsAsync();
 
             // 步骤4: 创建证书
             StatusText.Text = "步骤 4/5: 创建代码签名证书...";

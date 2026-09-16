@@ -118,7 +118,7 @@ public class AppleGsaClient
             var ideviceinfo = Path.Combine(toolsDir, "ideviceinfo.exe");
             if (!File.Exists(ideviceinfo))
             {
-                LogService.Log("ideviceinfo.exe not found, skipping device registration");
+                LogService.Info("ideviceinfo.exe not found, skipping device registration");
                 return true; // 不阻止流程
             }
 
@@ -129,7 +129,7 @@ public class AppleGsaClient
         }
         catch (Exception ex)
         {
-            LogService.Log($"Device registration failed: {ex.Message}");
+            LogService.Info($"Device registration failed: {ex.Message}");
             return false;
         }
     }
@@ -170,11 +170,11 @@ public class AppleGsaClient
             if (profilePath == null)
                 return null;
 
-            return (p12Path.Path, p12Path.Password, profilePath);
+            return (p12Path.Value.Path, p12Path.Value.Password, profilePath);
         }
         catch (Exception ex)
         {
-            LogService.Log($"Certificate creation failed: {ex.Message}");
+            LogService.Info($"Certificate creation failed: {ex.Message}");
             return null;
         }
     }
@@ -193,7 +193,7 @@ public class AppleGsaClient
                 var records = Directory.GetFiles(appleFolder, "*.plist");
                 if (records.Length > 0)
                 {
-                    LogService.Log($"Found {records.Length} Apple Lockdown records, attempting Anisette extraction...");
+                    LogService.Info($"Found {records.Length} Apple Lockdown records, attempting Anisette extraction...");
                 }
             }
         }
@@ -249,7 +249,7 @@ public class AppleGsaClient
 
         if (!response.IsSuccessStatusCode)
         {
-            LogService.Log($"SRP Init failed: {response.StatusCode}");
+            LogService.Info($"SRP Init failed: {response.StatusCode}");
             return null;
         }
 
@@ -315,7 +315,7 @@ public class AppleGsaClient
 
         if (!response.IsSuccessStatusCode)
         {
-            LogService.Log($"SRP Complete failed: {response.StatusCode}");
+            LogService.Info($"SRP Complete failed: {response.StatusCode}");
             return null;
         }
 
@@ -379,7 +379,7 @@ public class AppleGsaClient
         // 调用 Apple Developer Portal 注册设备
         // POST https://developer.apple.com/services-account/QH65B2/devices/addDevice.action
         // 需要先获取 CSRF token 和 session cookies
-        LogService.Log($"Registering device: {name} ({udid})");
+        LogService.Info($"Registering device: {name} ({udid})");
         await Task.Delay(1000);
         return true;
     }
@@ -390,7 +390,7 @@ public class AppleGsaClient
         var openssl = Path.Combine(_toolsDir, "openssl.exe");
         if (!File.Exists(openssl))
         {
-            LogService.Log("openssl.exe not found, using built-in CSR generation");
+            LogService.Info("openssl.exe not found, using built-in CSR generation");
             return GenerateCSR();
         }
 
@@ -438,7 +438,7 @@ public class AppleGsaClient
 
     private async Task<(string CertId, string CertContent)?> SubmitCertificateToAppleAsync(string csrPem)
     {
-        LogService.Log("Submitting certificate to Apple Developer Portal...");
+        LogService.Info("Submitting certificate to Apple Developer Portal...");
         await Task.Delay(2000);
         // 实际实现需要调用 Apple Developer Portal API
         return ("CERT_ID_PLACEHOLDER", "CERT_CONTENT_PLACEHOLDER");
@@ -446,7 +446,7 @@ public class AppleGsaClient
 
     private async Task<string?> DownloadCertificateAsync(string certId)
     {
-        LogService.Log($"Downloading certificate {certId}...");
+        LogService.Info($"Downloading certificate {certId}...");
         await Task.Delay(1000);
         // 实际实现需要下载证书
         return Path.Combine(_dataDir, "certificate.cer");
@@ -457,7 +457,7 @@ public class AppleGsaClient
         var p12Path = Path.Combine(_dataDir, "cert.p12");
         var password = "altstore_" + Guid.NewGuid().ToString("N")[..8];
 
-        LogService.Log($"Exporting certificate to P12: {p12Path}");
+        LogService.Info($"Exporting certificate to P12: {p12Path}");
         await Task.Delay(500);
 
         return (p12Path, password);
@@ -467,7 +467,7 @@ public class AppleGsaClient
     {
         var profilePath = Path.Combine(_dataDir, "embedded.mobileprovision");
 
-        LogService.Log($"Creating provisioning profile for {bundleId}...");
+        LogService.Info($"Creating provisioning profile for {bundleId}...");
         await Task.Delay(2000);
 
         // 实际实现需要调用 Apple Developer Portal API

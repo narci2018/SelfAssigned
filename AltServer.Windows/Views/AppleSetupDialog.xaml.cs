@@ -32,21 +32,21 @@ public partial class AppleSetupDialog : Window
 
         if (string.IsNullOrEmpty(appleId) || string.IsNullOrEmpty(password))
         {
-            StatusText.Visibility = Visibility.Visible;
-            StatusText.Text = "请输入 Apple ID 和密码";
-            StatusText.Foreground = System.Windows.Media.Brushes.Red;
+            ShowError("请输入 Apple ID 和密码");
             return;
         }
 
-        SubmitBtn.IsEnabled = false;
-        SubmitBtn.Content = "配置中...";
-        ProgressBar.Visibility = Visibility.Visible;
-        StatusText.Visibility = Visibility.Visible;
-        StatusText.Foreground = new System.Windows.Media.SolidColorBrush(
-            System.Windows.Media.Color.FromRgb(0x64, 0x74, 0x8B));
+        if (!appleId.Contains("@"))
+        {
+            ShowError("请输入有效的 Apple ID (邮箱格式)");
+            return;
+        }
 
         try
         {
+            SubmitBtn.IsEnabled = false;
+            ProgressBar.Visibility = Visibility.Visible;
+
             // 步骤1: 检测设备
             StatusText.Text = "步骤 1/5: 检测设备...";
             var settings = new SettingsService();
@@ -61,15 +61,14 @@ public partial class AppleSetupDialog : Window
 
             StatusText.Text = $"检测到设备: {devices[0].Name}";
 
-            // 步骤2: 登录 Apple ID
-            StatusText.Text = "步骤 2/5: 登录 Apple ID...";
-            var settings = new SettingsService();
-            var grandslam = new AppleGrandslamClient(settings.ResolveToolsDir());
-            var authResult = await grandslam.AuthenticateAsync(appleId, password);
+            // 步骤2: 登录 Apple ID (使用 GSA SRP 协议)
+            StatusText.Text = "步骤 2/5: 登录 Apple ID (SRP 认证)...";
+            var gsaClient = new AppleGsaClient(settings.ResolveToolsDir(), _dataDir);
+            var authResult = await gsaClient.AuthenticateAsync(appleId, password);
 
             if (authResult.Status == AuthStatus.Requires2FA)
             {
-                // 简化处理：提示用户在设备上确认
+                // 提示用户在设备上确认双重认证
                 StatusText.Text = "步骤 2/5: 请在设备上确认双重认证...";
                 await Task.Delay(2000);
             }
@@ -79,19 +78,43 @@ public partial class AppleSetupDialog : Window
                 return;
             }
 
-            // 步骤3: 设备已就绪
-            StatusText.Text = "步骤 3/5: 设备授权完成...";
+            // 步骤3: 注册设备
+            StatusText.Text = "步骤 3/5: 注册设备到 Apple Developer...";
+            var registered = await gsaClient.RegisterDeviceAsync(
+                devices[0].Udid,
+                devices[0].Name);
 
-            // 步骤4: 保存 Apple ID 配置
-            StatusText.Text = "步骤 4/5: 保存配置...";
+            if (!registered)
+            {
+                ShowError("设备注册失败");
+                return;
+            }
+
+            // 步骤4: 创建证书
+            StatusText.Text = "步骤 4/5: 创建代码签名证书...";
+            var bundleId = $"com.altserver.{DateTime.Now:yyyyMMdd}";
+            var certResult = await gsaClient.CreateCertificateAsync(devices[0].Udid, bundleId);
+
+            if (certResult == null)
+            {
+                ShowError("证书创建失败");
+                return;
+            }
+
+            // 步骤5: 保存配置
+            StatusText.Text = "步骤 5/5: 保存配置...";
             settings.Data.AppleId = appleId;
+            settings.Data.P12Path = certResult.Value.P12Path;
+            settings.Data.P12Password = certResult.Value.Password;
+            settings.Data.MobileProvisionPath = certResult.Value.ProvisionPath;
             settings.Save();
 
-            // 步骤5: 完成
-            StatusText.Text = "步骤 5/5: 完成...";
+            ResultP12Path = certResult.Value.P12Path;
+            ResultProvisionPath = certResult.Value.ProvisionPath;
+            ResultP12Password = certResult.Value.Password;
             _completed = true;
 
-            StatusText.Text = "✅ Apple ID 登录成功! 设备已授权，可以开始安装应用";
+            StatusText.Text = "✅ 配置完成! 证书和配置文件已自动设置";
             StatusText.Foreground = new System.Windows.Media.SolidColorBrush(
                 System.Windows.Media.Color.FromRgb(0x16, 0xA3, 0x4A));
 

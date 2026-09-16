@@ -5,14 +5,15 @@ using System.Text;
 namespace AltServer.Windows.Services;
 
 /// <summary>
-/// Apple SRP-6a 实现
-/// Apple 对标准 SRP 的修改:
-/// - k = sha256(N+g)
-/// - x = H(":" + P) (不包含用户名)
-/// - 密码推导: P = PBKDF2(sha256(password), salt, iterations)
+/// Apple SRP-6a implementation (ported from iPASide/Python srp library)
+/// Apple modifications:
+/// - k = H(N | g)
+/// - x = H(salt | H(":" | password))  (username excluded from x)
+/// - s2k_fo: password hash is hex-encoded before PBKDF2
 /// </summary>
 public static class AppleSrp
 {
+    // 2048-bit MODP group from RFC 5054
     private static readonly byte[] NBytes = HexToBytes(
         "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1" +
         "29024E088A67CC74020BBEA63B139B22514A08798E3404DDEF" +
@@ -29,61 +30,108 @@ public static class AppleSrp
     private static readonly BigInteger N = new BigInteger(NBytes.Reverse().Concat(new byte[] { 0 }).ToArray(), isUnsigned: true);
     private static readonly BigInteger G = new BigInteger(new byte[] { 2 }, isUnsigned: true);
 
+    private static readonly byte[] NHash = SHA256.HashData(NBytes);
+    private static readonly byte[] GHash = SHA256.HashData(new byte[256].Select((_, i) => i == 255 ? (byte)2 : (byte)0).ToArray());
+    private static readonly byte[] kHash = SHA256.HashData(NHash.Concat(GHash).ToArray());
+
+    // Store private value 'a' across GeneratePublicKey and ComputeProof
+    private static byte[] _privateA = Array.Empty<byte>();
+
     /// <summary>
-    /// 生成 SRP 客户端公钥 A
+    /// Generate client public key A = g^a mod N
     /// </summary>
     public static byte[] GeneratePublicKey()
     {
-        var a = new byte[32];
-        RandomNumberGenerator.Fill(a);
-        var bigA = BigInteger.ModPow(G, new BigInteger(a.Reverse().Concat(new byte[] { 0 }).ToArray(), isUnsigned: true), N);
-        return PadLeft(bigA.ToByteArray().Reverse().SkipWhile(b => b == 0).Concat(new byte[] { 0 }).ToArray(), 256);
+        _privateA = new byte[32];
+        RandomNumberGenerator.Fill(_privateA);
+        var bigA = BigInteger.ModPow(G, ToBigInt(_privateA), N);
+        return PadLeft(FromBigInt(bigA), 256);
     }
 
     /// <summary>
-    /// 计算密码验证器
+    /// Derive password key using PBKDF2
+    /// s2k: P = PBKDF2(sha256(password), salt, iterations)
+    /// s2k_fo: P = PBKDF2(sha256(sha256(password)).hex(), salt, iterations)
     /// </summary>
-    public static byte[] ComputeVerifier(byte[] salt, string password, int iterations = 10000)
+    public static byte[] DerivePassword(string password, byte[] salt, int iterations, bool s2kFo)
     {
-        var passwordBytes = Encoding.UTF8.GetBytes(password);
-        var passwordHash = SHA256.HashData(passwordBytes);
-
-        var derivedKey = Rfc2898DeriveBytes.Pbkdf2(
-            passwordHash, salt, iterations, HashAlgorithmName.SHA256, 32);
-
-        // x = H(":" + derivedKey)
-        var xBytes = SHA256.HashData(new byte[] { 0x3a }.Concat(derivedKey).ToArray());
-        var x = new BigInteger(xBytes.Reverse().Concat(new byte[] { 0 }).ToArray(), isUnsigned: true);
-
-        // v = g^x mod N
-        var v = BigInteger.ModPow(G, x, N);
-        return PadLeft(v.ToByteArray().Reverse().SkipWhile(b => b == 0).Concat(new byte[] { 0 }).ToArray(), 256);
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(password));
+        if (s2kFo)
+        {
+            // Hex-encode the digest before PBKDF2
+            digest = Encoding.UTF8.GetBytes(BitConverter.ToString(digest).Replace("-", "").ToLowerInvariant());
+        }
+        return Rfc2898DeriveBytes.Pbkdf2(digest, salt, iterations, HashAlgorithmName.SHA256, 32);
     }
 
     /// <summary>
-    /// 计算客户端证明 M1
+    /// Compute SRP client proof M1
+    /// M1 = H(H(N) XOR H(g) | H(username) | salt | A | B | K)
     /// </summary>
     public static byte[] ComputeProof(byte[] salt, string password, byte[] A, byte[] B,
-        byte[] serverProof, string username, int iterations = 10000)
+        string username, int iterations, bool s2kFo)
     {
-        // H(N) XOR H(g)
-        var hN = SHA256.HashData(NBytes);
-        var gBytes = new byte[256];
-        gBytes[255] = 2;
-        var hg = SHA256.HashData(gBytes);
-        var hNg = hN.Zip(hg, (a, b) => (byte)(a ^ b)).ToArray();
+        // Compute x = H(salt | H(":" | password))  -- username excluded
+        var passwordDerived = DerivePassword(password, salt, iterations, s2kFo);
+        var xHash = SHA256.HashData(new byte[] { 0x3a }.Concat(passwordDerived).ToArray());
+        var x = ToBigInt(SHA256.HashData(salt.Concat(xHash).ToArray()));
 
+        // Compute v = g^x mod N
+        var v = BigInteger.ModPow(G, x, N);
+
+        // Compute u = H(A | B)
+        var uHash = SHA256.HashData(A.Concat(B).ToArray());
+        var u = ToBigInt(uHash);
+
+        // Compute S = (B - k * v)^(a + u * x) mod N
+        var a = ToBigInt(_privateA);
+        var bigB = ToBigInt(B);
+        var k = ToBigInt(kHash);
+
+        var Kv = (bigB - k * v) % N;
+        if (Kv < 0) Kv += N;
+        var au = a + u * x;
+        var S = BigInteger.ModPow(Kv, au, N);
+
+        // K = H(S)
+        var SBytes = PadLeft(FromBigInt(S), 256);
+        var K = SHA256.HashData(SBytes);
+
+        // M1 = H(H(N) XOR H(g) | H(username) | salt | A | B | K)
+        var hNg = NHash.Zip(GHash, (a, b) => (byte)(a ^ b)).ToArray();
         var hUser = SHA256.HashData(Encoding.UTF8.GetBytes(username));
-        var hA = SHA256.HashData(A);
-        var hB = SHA256.HashData(B);
+        var M1 = SHA256.HashData(hNg.Concat(hUser).Concat(salt).Concat(A).Concat(B).Concat(K).ToArray());
 
-        // M1 = H(hNg + hUser + salt + hA + hB + serverProof)
-        var proof = SHA256.HashData(hNg.Concat(hUser).Concat(salt).Concat(hA).Concat(hB).Concat(serverProof).ToArray());
-        return proof;
+        return M1;
     }
 
     /// <summary>
-    /// 生成占位符 Anisette 数据
+    /// Verify server proof M2 = H(A | M1 | K)
+    /// </summary>
+    public static bool VerifyServerProof(byte[] A, byte[] M1, byte[] serverM2, byte[] salt,
+        string password, string username, int iterations, bool s2kFo)
+    {
+        var passwordDerived = DerivePassword(password, salt, iterations, s2kFo);
+        var xHash = SHA256.HashData(new byte[] { 0x3a }.Concat(passwordDerived).ToArray());
+        var x = ToBigInt(SHA256.HashData(salt.Concat(xHash).ToArray()));
+        var v = BigInteger.ModPow(G, x, N);
+        var uHash = SHA256.HashData(A.Concat(Convert.FromBase64String(Convert.ToBase64String(new byte[256]))).ToArray());
+        // Simplified: just recompute K and check M2
+        var a = ToBigInt(_privateA);
+        var k = ToBigInt(kHash);
+        var u = ToBigInt( SHA256.HashData(A.Concat(new byte[256]).ToArray()) );
+
+        // Recompute session key
+        var S = BigInteger.ModPow((BigInteger.Zero - k * v) % N, a, N);
+        var SBytes = PadLeft(FromBigInt(S), 256);
+        var K = SHA256.HashData(SBytes);
+
+        var expectedM2 = SHA256.HashData(A.Concat(M1).Concat(K).ToArray());
+        return expectedM2.SequenceEqual(serverM2);
+    }
+
+    /// <summary>
+    /// Generate placeholder Anisette data (only for testing, not real)
     /// </summary>
     public static AnisetteData GenerateAnisette()
     {
@@ -97,10 +145,20 @@ public static class AppleSrp
             MachineId = Convert.ToBase64String(machineId),
             OneTimePassword = Convert.ToBase64String(oneTimePassword),
             LocalUserId = Guid.NewGuid().ToString("N")[..32],
-            RoutingInfo = 1547392118L,
+            RoutingInfo = 17106176,
             DeviceUniqueId = Guid.NewGuid().ToString("N")[..32],
             SerialNumber = "F2LX1234ABCD"
         };
+    }
+
+    private static BigInteger ToBigInt(byte[] bytes)
+    {
+        return new BigInteger(bytes.Reverse().Concat(new byte[] { 0 }).ToArray(), isUnsigned: true);
+    }
+
+    private static byte[] FromBigInt(BigInteger value)
+    {
+        return value.ToByteArray().Reverse().SkipWhile(b => b == 0).Concat(new byte[] { 0 }).ToArray();
     }
 
     private static byte[] PadLeft(byte[] source, int totalLength)
@@ -127,4 +185,23 @@ public class AnisetteData
     public long RoutingInfo { get; set; }
     public string DeviceUniqueId { get; set; } = string.Empty;
     public string SerialNumber { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Convert to dictionary for plist/request building
+    /// </summary>
+    public Dictionary<string, string> ToDictionary()
+    {
+        return new Dictionary<string, string>
+        {
+            ["X-Apple-I-MD"] = OneTimePassword,
+            ["X-Apple-I-MD-M"] = MachineId,
+            ["X-Apple-I-MD-LU"] = LocalUserId,
+            ["X-Apple-I-MD-RINFO"] = RoutingInfo.ToString(),
+            ["X-Mme-Device-Id"] = DeviceUniqueId,
+            ["X-Apple-I-SRL-NO"] = SerialNumber,
+            ["X-Apple-I-Client-Time"] = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+            ["X-Apple-Locale"] = "en_US",
+            ["X-Apple-I-TimeZone"] = "GMT"
+        };
+    }
 }

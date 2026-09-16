@@ -8,34 +8,49 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
-using System.Xml.Linq;
+using System.Text.Json.Serialization;
 
 namespace AltServer.Windows.Services;
 
 /// <summary>
-/// Apple Grandslam Authentication 客户端
+/// Apple Grandslam Authentication client (ported from iPASide gsa.py + anisette.py)
+/// Key differences from naive implementation:
+/// - Anisette data from remote server (no local DLLs needed)
+/// - Proper plist format with XML prolog and DOCTYPE
+/// - Header includes Version "1.0.1"
+/// - cpd includes ALL anisette headers
+/// - Proper SRP with s2k/s2k_fo protocol handling
 /// </summary>
-public class AppleGsaClient
+public class AppleGsaClient : IDisposable
 {
     private readonly HttpClient _http;
     private readonly string _toolsDir;
     private readonly string _dataDir;
-    private Process? _anisetteProcess;
 
+    private AnisetteData? _anisette;
+    private string _sessionKey = string.Empty;
     private string _adsId = string.Empty;
     private string _gsIdmsToken = string.Empty;
-    private string _prsId = string.Empty;
-    private AnisetteData? _anisette;
 
     public bool IsAuthenticated { get; private set; }
     public string? TeamId { get; private set; }
+
+    private const string GS_ENDPOINT = "https://gsa.apple.com/grandslam/GsService2";
+    private const string GS_USER_AGENT = "akd/1.0 CFNetwork/978.0.7 Darwin/18.7.0";
+    private const string PLIST_PROLOG = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n";
+
+    // Remote Anisette servers (tried in order)
+    private static readonly string[] AnisetteUrls = new[]
+    {
+        "https://ani.sidestore.io/v3/get_headers"
+    };
 
     public AppleGsaClient(string toolsDir, string dataDir)
     {
         _toolsDir = toolsDir;
         _dataDir = dataDir;
 
-        System.Net.ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;
+        ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;
 
         var handler = new HttpClientHandler
         {
@@ -48,14 +63,10 @@ public class AppleGsaClient
         {
             Timeout = TimeSpan.FromSeconds(30)
         };
-
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("akd/1.0 CFNetwork/978.0.7 Darwin/18.7.0");
-        _http.DefaultRequestHeaders.Accept.ParseAdd("*/*");
-        _http.DefaultRequestHeaders.AcceptLanguage.ParseAdd("en-US,en;q=0.9");
     }
 
     /// <summary>
-    /// 完整认证流程
+    /// Complete authentication flow
     /// </summary>
     public async Task<AuthResult> AuthenticateAsync(string appleId, string password)
     {
@@ -63,76 +74,113 @@ public class AppleGsaClient
         {
             LogService.Info($"[GSA] 开始认证: {appleId}");
 
-            // 步骤 1: 获取 Anisette
+            // Step 1: Get Anisette data
             LogService.Info("[GSA] 步骤1: 获取 Anisette 数据...");
             _anisette = await GetAnisetteAsync();
             if (_anisette == null)
             {
                 LogService.Error("[GSA] 无法获取 Anisette 数据");
-                return AuthResult.Error("无法获取 Anisette 数据。请确保已安装 iTunes 和 iCloud (从 Apple 网站下载，非 Microsoft Store 版本)");
+                return AuthResult.Error("无法获取 Anisette 数据。请检查网络连接。");
             }
-            LogService.Info($"[GSA] Anisette 获取成功: OTP={_anisette.OneTimePassword[..Math.Min(20, _anisette.OneTimePassword.Length)]}...");
+            var otpPreview = _anisette.OneTimePassword.Length > 20
+                ? _anisette.OneTimePassword[..20]
+                : _anisette.OneTimePassword;
+            LogService.Info($"[GSA] Anisette 获取成功: OTP={otpPreview}...");
 
-            // 步骤 2: SRP Init
-            LogService.Info("[GSA] 步骤2: SRP 初始化请求...");
-            var srpInit = await SrpInitAsync(appleId);
-            if (srpInit == null)
+            // Step 2: SRP Init
+            LogService.Info("[GSA] 步骤2: SRP 初始化...");
+            var anisetteHeaders = _anisette.ToDictionary();
+            var initResult = await GsRequest(new Dictionary<string, object>
+            {
+                ["A2k"] = AppleSrp.GeneratePublicKey(),
+                ["ps"] = new object[] { "s2k", "s2k_fo" },
+                ["u"] = appleId,
+                ["o"] = "init"
+            }, anisetteHeaders);
+
+            if (initResult == null)
             {
                 LogService.Error("[GSA] SRP Init 返回 null");
                 return AuthResult.Error("SRP 初始化失败 - 无法连接 Apple 服务器");
             }
-            LogService.Info($"[GSA] SRP Init 响应: ec={(srpInit.TryGetValue("ec", out var ec) ? ec : "N/A")}");
 
-            // 检查错误码
-            if (srpInit.TryGetValue("ec", out var initEc) && initEc != "0")
+            // Check for errors
+            if (initResult.TryGetValue("ec", out var initEc) && initEc != "0")
             {
-                var em = srpInit.TryGetValue("em", out var initEm) ? initEm : "未知";
+                var em = initResult.TryGetValue("em", out var initEm) ? initEm : "未知";
                 LogService.Error($"[GSA] SRP Init 错误: ec={initEc}, em={em}");
                 return AuthResult.Error($"Apple 服务器拒绝: {em}");
             }
 
-            // 步骤 3: SRP Complete
+            // Get SRP parameters
+            var protocol = initResult.TryGetValue("sp", out var sp) ? sp : "s2k";
+            var salt = initResult.TryGetValue("s", out var s) && !string.IsNullOrEmpty(s)
+                ? Convert.FromBase64String(s) : new byte[32];
+            var iterations = initResult.TryGetValue("i", out var iterStr) && int.TryParse(iterStr, out var iter)
+                ? iter : 10000;
+            var serverB = initResult.TryGetValue("B", out var b64B) && !string.IsNullOrEmpty(b64B)
+                ? Convert.FromBase64String(b64B) : Array.Empty<byte>();
+            var c = initResult.TryGetValue("c", out var cVal) ? cVal : "";
+
+            LogService.Info($"[GSA] SRP Init: protocol={protocol}, salt={salt.Length}B, iter={iterations}");
+
+            if (serverB.Length == 0)
+            {
+                LogService.Error("[GSA] SRP Init 响应中缺少 B 参数");
+                return AuthResult.Error("SRP 初始化失败 - 服务器响应异常");
+            }
+
+            // Step 3: Compute M1 and send complete
             LogService.Info("[GSA] 步骤3: SRP 验证...");
-            var srpComplete = await SrpCompleteAsync(srpInit, appleId, password);
-            if (srpComplete == null)
+            bool s2kFo = protocol == "s2k_fo";
+            var A = AppleSrp.GeneratePublicKey();
+            var M1 = AppleSrp.ComputeProof(salt, password, A, serverB, appleId, iterations, s2kFo);
+
+            var completeResult = await GsRequest(new Dictionary<string, object>
+            {
+                ["c"] = c,
+                ["M1"] = M1,
+                ["u"] = appleId,
+                ["o"] = "complete"
+            }, anisetteHeaders);
+
+            if (completeResult == null)
             {
                 LogService.Error("[GSA] SRP Complete 返回 null");
                 return AuthResult.Error("SRP 验证失败 - 密码错误或网络问题");
             }
 
-            // 解析结果
-            if (srpComplete.TryGetValue("ec", out var errorCode))
+            // Check result
+            if (completeResult.TryGetValue("ec", out var completeEc))
             {
-                LogService.Info($"[GSA] SRP Complete: ec={errorCode}");
+                LogService.Info($"[GSA] SRP Complete: ec={completeEc}");
 
-                if (errorCode == "0")
+                if (completeEc == "0")
                 {
-                    // 成功
-                    _adsId = srpComplete.TryGetValue("adsid", out var adsid) ? adsid : "";
-                    _gsIdmsToken = srpComplete.TryGetValue("GsIdmsToken", out var token) ? token : "";
-                    _prsId = srpComplete.TryGetValue("DsPrsId", out var prsid) ? prsid : "";
+                    // Success
+                    _adsId = completeResult.TryGetValue("adsid", out var adsid) ? adsid : "";
+                    _gsIdmsToken = completeResult.TryGetValue("GsIdmsToken", out var token) ? token : "";
                     IsAuthenticated = true;
                     LogService.Info($"[GSA] 认证成功! adsid={_adsId}");
                     return AuthResult.Success;
                 }
-                else if (errorCode == "-26402")
+                else if (completeEc == "-26402")
                 {
-                    // 需要 2FA
                     LogService.Info("[GSA] 需要双重认证");
                     return AuthResult.Requires2FA;
                 }
                 else
                 {
-                    var em = srpComplete.TryGetValue("em", out var msg) ? msg : "未知错误";
-                    LogService.Error($"[GSA] 认证失败: ec={errorCode}, em={em}");
+                    var em = completeResult.TryGetValue("em", out var msg) ? msg : "未知错误";
+                    LogService.Error($"[GSA] 认证失败: ec={completeEc}, em={em}");
                     return AuthResult.Error($"Apple 认证失败: {em}");
                 }
             }
 
-            // 没有 ec 字段，检查其他成功标志
-            if (srpComplete.ContainsKey("adsid"))
+            // No ec field, check for adsid as success indicator
+            if (completeResult.ContainsKey("adsid"))
             {
-                _adsId = srpComplete["adsid"];
+                _adsId = completeResult["adsid"];
                 IsAuthenticated = true;
                 return AuthResult.Success;
             }
@@ -161,143 +209,88 @@ public class AppleGsaClient
 
     private async Task<AnisetteData?> GetAnisetteAsync()
     {
-        // 方案1: 启动 anisette-server
+        // Method 1: Remote Anisette server
+        try
+        {
+            using var testHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            testHttp.DefaultRequestHeaders.UserAgent.ParseAdd("AltServer/1.0");
+
+            foreach (var url in AnisetteUrls)
+            {
+                try
+                {
+                    LogService.Info($"[Anisette] 尝试远程服务器: {url}");
+                    var response = await testHttp.GetStringAsync(url);
+                    LogService.Info($"[Anisette] 服务器响应长度: {response.Length}");
+
+                    var json = JsonDocument.Parse(response);
+                    var root = json.RootElement;
+
+                    var anisette = new AnisetteData
+                    {
+                        OneTimePassword = root.TryGetProperty("X-Apple-I-MD", out var md) ? md.GetString() ?? "" : "",
+                        MachineId = root.TryGetProperty("X-Apple-I-MD-M", out var mdm) ? mdm.GetString() ?? "" : "",
+                        RoutingInfo = root.TryGetProperty("X-Apple-I-MD-RINFO", out var rinfo)
+                            && long.TryParse(rinfo.GetString(), out var ri) ? ri : 17106176,
+                        LocalUserId = root.TryGetProperty("X-Apple-I-MD-LU", out var lu) ? lu.GetString() ?? "-2" : "-2",
+                        DeviceUniqueId = root.TryGetProperty("X-Mme-Device-Id", out var devid)
+                            ? devid.GetString() ?? Guid.NewGuid().ToString("N")[..32]
+                            : Guid.NewGuid().ToString("N")[..32],
+                        SerialNumber = root.TryGetProperty("X-Apple-I-SRL-NO", out var srl)
+                            ? srl.GetString() ?? "F2LX1234ABCD"
+                            : "F2LX1234ABCD"
+                    };
+
+                    if (!string.IsNullOrEmpty(anisette.OneTimePassword) && !string.IsNullOrEmpty(anisette.MachineId))
+                    {
+                        LogService.Info($"[Anisette] 远程获取成功!");
+                        return anisette;
+                    }
+                    LogService.Error("[Anisette] 服务器返回了空的 Anisette 数据");
+                }
+                catch (Exception ex)
+                {
+                    LogService.Error($"[Anisette] 服务器 {url} 失败: {ex.Message}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Error($"[Anisette] 远程获取异常: {ex.Message}");
+        }
+
+        // Method 2: Local anisette-server (fallback)
         try
         {
             var anisetteServer = Path.Combine(_toolsDir, "anisette-server.exe");
             if (File.Exists(anisetteServer))
             {
-                LogService.Info($"[Anisette] 启动 anisette-server: {anisetteServer}");
-
-                // Create working directory with all dependencies
-                var workDir = Path.Combine(_dataDir, "anisette-work");
-                if (Directory.Exists(workDir)) Directory.Delete(workDir, true);
-                Directory.CreateDirectory(workDir);
-                File.Copy(anisetteServer, Path.Combine(workDir, "anisette-server.exe"), true);
-
-                // Find and copy Apple DLLs from iTunes installation
-                LogService.Info("[Anisette] 搜索 Apple DLLs...");
-                var appleDlls = FindAppleDlls();
-                foreach (var dll in appleDlls)
-                {
-                    var dest = Path.Combine(workDir, Path.GetFileName(dll));
-                    try
-                    {
-                        File.Copy(dll, dest, true);
-                        LogService.Info($"  OK: {Path.GetFileName(dll)}");
-                    }
-                    catch { }
-                }
-
-                // Copy OpenSSL DLLs from tools dir
-                foreach (var dll in Directory.GetFiles(_toolsDir, "lib*.dll"))
-                {
-                    try
-                    {
-                        File.Copy(dll, Path.Combine(workDir, Path.GetFileName(dll)), true);
-                        LogService.Info($"  OK OpenSSL: {Path.GetFileName(dll)}");
-                    }
-                    catch { }
-                }
-
-                var psi = new ProcessStartInfo
-                {
-                    FileName = Path.Combine(workDir, "anisette-server.exe"),
-                    Arguments = "-p 6969",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true,
-                    WorkingDirectory = workDir
-                };
-
-                _anisetteProcess = Process.Start(psi);
-                if (_anisetteProcess != null)
-                {
-                    // 读取输出的后台任务
-                    var stdoutTask = _anisetteProcess.StandardOutput.ReadToEndAsync();
-                    var stderrTask = _anisetteProcess.StandardError.ReadToEndAsync();
-
-                    // 重试等待服务器启动
-                    LogService.Info("[Anisette] 等待服务器启动 (最多 15s)...");
-                    for (int i = 0; i < 15; i++)
-                    {
-                        await Task.Delay(1000);
-
-                        if (_anisetteProcess.HasExited)
-                        {
-                            var stdout = await stdoutTask;
-                            var stderr = await stderrTask;
-                            LogService.Error($"[Anisette] 服务器已退出 (exit={_anisetteProcess.ExitCode})");
-                            LogService.Error($"[Anisette] stdout: {stdout}");
-                            LogService.Error($"[Anisette] stderr: {stderr}");
-                            break;
-                        }
-
-                        // 尝试连接
-                        try
-                        {
-                            using var testHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
-                            var response = await testHttp.GetStringAsync("http://localhost:6969/get_headers?udid=-2");
-                            LogService.Info($"[Anisette] 服务器就绪, 获取数据...");
-
-                            var json = JsonDocument.Parse(response);
-                            var root = json.RootElement;
-
-                            var anisette = new AnisetteData
-                            {
-                                OneTimePassword = root.TryGetProperty("X-Apple-I-MD", out var md) ? md.GetString() ?? "" : "",
-                                MachineId = root.TryGetProperty("X-Apple-I-MD-M", out var mdm) ? mdm.GetString() ?? "" : "",
-                                RoutingInfo = root.TryGetProperty("X-Apple-I-MD-RINFO", out var rinfo) ? long.TryParse(rinfo.GetString(), out var ri) ? ri : 17106176 : 17106176,
-                                LocalUserId = "-2",
-                                DeviceUniqueId = Guid.NewGuid().ToString("N")[..32],
-                                SerialNumber = "F2LX1234ABCD"
-                            };
-
-                            LogService.Info($"[Anisette] 成功! OTP={anisette.OneTimePassword[..Math.Min(20, anisette.OneTimePassword.Length)]}...");
-                            try { _anisetteProcess.Kill(); } catch { }
-                            return anisette;
-                        }
-                        catch
-                        {
-                            // 还没就绪，继续等
-                        }
-                    }
-
-                    // 超时或失败
-                    try { _anisetteProcess.Kill(); } catch { }
-                }
-                else
-                {
-                    LogService.Error("[Anisette] 无法启动进程");
-                }
-            }
-            else
-            {
-                LogService.Info("[Anisette] anisette-server.exe 不存在");
+                LogService.Info("[Anisette] 尝试本地 anisette-server...");
+                var localResult = await TryLocalAnisetteServer(anisetteServer);
+                if (localResult != null) return localResult;
             }
         }
         catch (Exception ex)
         {
-            LogService.Error($"[Anisette] 异常: {ex.Message}");
+            LogService.Error($"[Anisette] 本地服务器失败: {ex.Message}");
         }
 
-        // 方案2: 回退
-        LogService.Info("[Anisette] 使用占位符数据 (认证可能失败)");
-        return AppleSrp.GenerateAnisette();
+        LogService.Error("[Anisette] 所有 Anisette 来源均失败");
+        return null;
     }
 
-    private List<string> FindAppleDlls()
+    private async Task<AnisetteData?> TryLocalAnisetteServer(string serverPath)
     {
-        var result = new List<string>();
+        var workDir = Path.Combine(_dataDir, "anisette-work");
+        if (Directory.Exists(workDir)) Directory.Delete(workDir, true);
+        Directory.CreateDirectory(workDir);
+        File.Copy(serverPath, Path.Combine(workDir, "anisette-server.exe"), true);
+
+        // Copy Apple DLLs
         var searchPaths = new[]
         {
             @"C:\Program Files\Common Files\Apple\Apple Application Support",
-            @"C:\Program Files (x86)\Common Files\Apple\Apple Application Support",
             @"C:\Program Files\iTunes",
-            @"C:\Program Files (x86)\iTunes",
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Common Files", "Apple", "Apple Application Support"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Common Files", "Apple", "Apple Application Support")
         };
 
         foreach (var dir in searchPaths)
@@ -305,245 +298,307 @@ public class AppleGsaClient
             if (!Directory.Exists(dir)) continue;
             try
             {
-                // Copy ALL DLLs from Apple Application Support - anisette-server needs the full runtime
-                var dlls = Directory.GetFiles(dir, "*.dll", SearchOption.TopDirectoryOnly);
-                result.AddRange(dlls);
-                LogService.Info($"[Anisette] 从 {dir} 找到 {dlls.Length} 个 DLLs");
+                foreach (var dll in Directory.GetFiles(dir, "*.dll", SearchOption.TopDirectoryOnly))
+                {
+                    try { File.Copy(dll, Path.Combine(workDir, Path.GetFileName(dll)), true); } catch { }
+                }
             }
             catch { }
         }
 
-        LogService.Info($"[Anisette] 共找到 {result.Count} 个 Apple DLLs");
-        return result;
+        var psi = new ProcessStartInfo
+        {
+            FileName = Path.Combine(workDir, "anisette-server.exe"),
+            Arguments = "-p 6969",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            WorkingDirectory = workDir
+        };
+
+        using var process = Process.Start(psi);
+        if (process == null) return null;
+
+        for (int i = 0; i < 10; i++)
+        {
+            await Task.Delay(1000);
+            if (process.HasExited)
+            {
+                LogService.Error($"[Anisette] 本地服务器退出 (exit={process.ExitCode})");
+                return null;
+            }
+
+            try
+            {
+                using var testHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+                var response = await testHttp.GetStringAsync("http://localhost:6969/get_headers?udid=-2");
+                var json = JsonDocument.Parse(response);
+                var root = json.RootElement;
+
+                var anisette = new AnisetteData
+                {
+                    OneTimePassword = root.TryGetProperty("X-Apple-I-MD", out var md) ? md.GetString() ?? "" : "",
+                    MachineId = root.TryGetProperty("X-Apple-I-MD-M", out var mdm) ? mdm.GetString() ?? "" : "",
+                    RoutingInfo = 17106176,
+                    LocalUserId = "-2",
+                    DeviceUniqueId = Guid.NewGuid().ToString("N")[..32],
+                    SerialNumber = "F2LX1234ABCD"
+                };
+
+                try { process.Kill(); } catch { }
+                return anisette;
+            }
+            catch { }
+        }
+
+        try { process.Kill(); } catch { }
+        return null;
     }
 
-    // MARK: - SRP
+    // MARK: - GSA Request
 
-    private async Task<Dictionary<string, string>?> SrpInitAsync(string appleId)
+    private async Task<Dictionary<string, string>?> GsRequest(
+        Dictionary<string, object> requestParams,
+        Dictionary<string, string> anisetteHeaders)
     {
-        var url = "https://gsa.apple.com/grandslam/GsService2";
-        LogService.Info($"[SRP] POST {url}");
-
-        var anisetteDict = BuildAnisetteDict();
-
-        var requestDict = new XElement("dict",
-            new XElement("key", "Header"),
-            new XElement("dict", anisetteDict),
-            new XElement("key", "Request"),
-            new XElement("dict",
-                new XElement("key", "A2k"),
-                new XElement("data", Convert.ToBase64String(AppleSrp.GeneratePublicKey())),
-                new XElement("key", "ps"),
-                new XElement("array",
-                    new XElement("string", "s2k"),
-                    new XElement("string", "s2k_fo")),
-                new XElement("key", "cpd"),
-                new XElement("dict",
-                    new XElement("key", "bootstrap"), new XElement("true"),
-                    new XElement("key", "icscrec"), new XElement("true"),
-                    new XElement("key", "loc"), new XElement("string", "en_US"),
-                    new XElement("key", "pbe"), new XElement("false"),
-                    new XElement("key", "prkgen"), new XElement("true"),
-                    new XElement("key", "svct"), new XElement("string", "iCloud")),
-                new XElement("key", "u"),
-                new XElement("string", appleId),
-                new XElement("key", "o"),
-                new XElement("string", "init"))
-        );
-
-        var plist = new XDocument(
-            new XDeclaration("1.0", "UTF-8", null),
-            requestDict);
-
-        var plistStr = plist.ToString();
-        LogService.Info($"[SRP] 请求体长度: {plistStr.Length}");
-
-        var request = new HttpRequestMessage(HttpMethod.Post, url)
+        // Build cpd (client-provided data) - includes ALL anisette headers + flags
+        var cpd = new Dictionary<string, object>
         {
-            Content = new StringContent(plistStr, Encoding.UTF8, "text/x-xml-plist")
+            ["bootstrap"] = true,
+            ["icscrec"] = true,
+            ["pbe"] = false,
+            ["prkgen"] = true,
+            ["svct"] = "iCloud",
+            ["loc"] = anisetteHeaders.TryGetValue("X-Apple-Locale", out var loc) ? loc : "en_US",
         };
-        request.Headers.Add("User-Agent", "akd/1.0 CFNetwork/978.0.7 Darwin/18.7.0");
 
-        // Add Anisette as HTTP headers too (some servers check both)
-        if (_anisette != null)
+        // Add ALL anisette headers to cpd (except X-MMe-Client-Info)
+        foreach (var kvp in anisetteHeaders)
         {
-            request.Headers.Add("X-Apple-I-MD", _anisette.OneTimePassword);
-            request.Headers.Add("X-Apple-I-MD-M", _anisette.MachineId);
-            request.Headers.Add("X-Apple-I-MD-LU", _anisette.LocalUserId);
-            request.Headers.Add("X-Apple-I-MD-RINFO", _anisette.RoutingInfo.ToString());
-            request.Headers.Add("X-Mme-Device-Id", _anisette.DeviceUniqueId);
-            request.Headers.Add("X-Apple-I-SRL-NO", _anisette.SerialNumber);
-            request.Headers.Add("X-Apple-I-Client-Time", DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"));
+            if (kvp.Key != "X-MMe-Client-Info")
+                cpd[kvp.Key] = kvp.Value;
         }
+
+        // Build full body: Header + Request
+        var body = new Dictionary<string, object>
+        {
+            ["Header"] = new Dictionary<string, object> { ["Version"] = "1.0.1" },
+            ["Request"] = new Dictionary<string, object>(requestParams)
+        };
+        ((Dictionary<string, object>)body["Request"])["cpd"] = cpd;
+
+        // Serialize to Apple plist format
+        var plistBody = ToApplePlist(body);
+
+        LogService.Info($"[SRP] POST {GS_ENDPOINT}");
+        LogService.Info($"[SRP] 请求体长度: {plistBody.Length}");
+
+        var request = new HttpRequestMessage(HttpMethod.Post, GS_ENDPOINT)
+        {
+            Content = new StringContent(plistBody, Encoding.UTF8, "text/x-xml-plist")
+        };
+        request.Headers.Add("User-Agent", GS_USER_AGENT);
+        request.Headers.Add("Accept", "*/*");
 
         LogService.Info("[SRP] 发送请求...");
         var response = await _http.SendAsync(request);
         LogService.Info($"[SRP] 响应: {response.StatusCode}");
 
-        var body = await response.Content.ReadAsStringAsync();
-        LogService.Info($"[SRP] 响应体长度: {body.Length}");
+        var responseBody = await response.Content.ReadAsStringAsync();
+        LogService.Info($"[SRP] 响应体长度: {responseBody.Length}");
 
         if (!response.IsSuccessStatusCode)
         {
-            LogService.Error($"[SRP] 失败: {response.StatusCode} - {body[..Math.Min(200, body.Length)]}");
+            var preview = responseBody.Length > 200 ? responseBody[..200] : responseBody;
+            LogService.Error($"[SRP] 失败: {response.StatusCode} - {preview}");
             return null;
         }
 
-        return ParsePlistDict(body);
+        return ParseApplePlist(responseBody);
     }
 
-    private async Task<Dictionary<string, string>?> SrpCompleteAsync(
-        Dictionary<string, string> init, string appleId, string password)
+    // MARK: - Apple Plist Serialization/Deserialization
+
+    /// <summary>
+    /// Serialize a dictionary to Apple plist XML format
+    /// </summary>
+    private static string ToApplePlist(object obj)
     {
-        var url = "https://gsa.apple.com/grandslam/GsService2";
-
-        // 解析 SRP 参数
-        if (!init.TryGetValue("B", out var b64B) || string.IsNullOrEmpty(b64B))
-        {
-            LogService.Error("[SRP] 响应中缺少 B 参数");
-            return null;
-        }
-
-        var B = Convert.FromBase64String(b64B);
-        var salt = init.TryGetValue("salt", out var s) && !string.IsNullOrEmpty(s) ? Convert.FromBase64String(s) : new byte[32];
-        var iterations = init.TryGetValue("i", out var iterStr) && int.TryParse(iterStr, out var iter) ? iter : 10000;
-
-        LogService.Info($"[SRP] B长度={B.Length}, salt长度={salt.Length}, iterations={iterations}");
-
-        // 计算
-        var A = AppleSrp.GeneratePublicKey();
-        var M1 = AppleSrp.ComputeProof(salt, password, A, B, [], appleId, iterations);
-
-        LogService.Info("[SRP] 构建 Complete 请求...");
-
-        var anisetteDict = BuildAnisetteDict();
-
-        var requestDict = new XElement("dict",
-            new XElement("key", "Header"),
-            new XElement("dict", anisetteDict),
-            new XElement("key", "Request"),
-            new XElement("dict",
-                new XElement("key", "A2k"),
-                new XElement("data", Convert.ToBase64String(A)),
-                new XElement("key", "M1"),
-                new XElement("data", Convert.ToBase64String(M1)),
-                new XElement("key", "ps"),
-                new XElement("array",
-                    new XElement("string", "s2k"),
-                    new XElement("string", "s2k_fo")),
-                new XElement("key", "cpd"),
-                new XElement("dict",
-                    new XElement("key", "bootstrap"), new XElement("true"),
-                    new XElement("key", "icscrec"), new XElement("true"),
-                    new XElement("key", "loc"), new XElement("string", "en_US"),
-                    new XElement("key", "pbe"), new XElement("false"),
-                    new XElement("key", "prkgen"), new XElement("true"),
-                    new XElement("key", "svct"), new XElement("string", "iCloud")),
-                new XElement("key", "u"),
-                new XElement("string", appleId),
-                new XElement("key", "o"),
-                new XElement("string", "complete"))
-        );
-
-        var plist = new XDocument(
-            new XDeclaration("1.0", "UTF-8", null),
-            requestDict);
-
-        var request = new HttpRequestMessage(HttpMethod.Post, url)
-        {
-            Content = new StringContent(plist.ToString(), Encoding.UTF8, "text/x-xml-plist")
-        };
-        request.Headers.Add("User-Agent", "akd/1.0 CFNetwork/978.0.7 Darwin/18.7.0");
-
-        LogService.Info("[SRP] 发送 Complete 请求...");
-        var response = await _http.SendAsync(request);
-        var body = await response.Content.ReadAsStringAsync();
-        LogService.Info($"[SRP] Complete 响应: {response.StatusCode}, 长度={body.Length}");
-
-        if (!response.IsSuccessStatusCode)
-        {
-            LogService.Error($"[SRP] Complete 失败: {body[..Math.Min(500, body.Length)]}");
-            return null;
-        }
-
-        return ParsePlistDict(body);
+        var sb = new StringBuilder();
+        sb.Append(PLIST_PROLOG);
+        sb.Append("<plist version=\"1.0\">\n");
+        AppendPlistValue(sb, obj, 0);
+        sb.Append("</plist>");
+        return sb.ToString();
     }
 
-    // MARK: - 辅助
-
-    private List<XElement> BuildAnisetteDict()
+    private static void AppendPlistValue(StringBuilder sb, object? value, int indent)
     {
-        if (_anisette == null)
-        {
-            LogService.Error("[Anisette] _anisette 为 null, 使用空值");
-            return new List<XElement>();
-        }
+        var pad = new string(' ', indent * 2);
 
-        return new List<XElement>
+        if (value is null)
         {
-            new XElement("key", "X-Apple-I-MD"),
-            new XElement("string", _anisette.OneTimePassword),
-            new XElement("key", "X-Apple-I-MD-M"),
-            new XElement("string", _anisette.MachineId),
-            new XElement("key", "X-Apple-I-MD-LU"),
-            new XElement("string", _anisette.LocalUserId),
-            new XElement("key", "X-Apple-I-MD-RINFO"),
-            new XElement("string", _anisette.RoutingInfo.ToString()),
-            new XElement("key", "X-Mme-Device-Id"),
-            new XElement("string", _anisette.DeviceUniqueId),
-            new XElement("key", "X-Apple-I-SRL-NO"),
-            new XElement("string", _anisette.SerialNumber),
-            new XElement("key", "X-Apple-I-Client-Time"),
-            new XElement("string", DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"))
-        };
+            sb.Append($"{pad}<none/>\n");
+        }
+        else if (value is bool b)
+        {
+            sb.Append($"{pad}<{(b ? "true" : "false")}/>\n");
+        }
+        else if (value is int i)
+        {
+            sb.Append($"{pad}<integer>{i}</integer>\n");
+        }
+        else if (value is long l)
+        {
+            sb.Append($"{pad}<integer>{l}</integer>\n");
+        }
+        else if (value is double d)
+        {
+            sb.Append($"{pad}<real>{d}</real>\n");
+        }
+        else if (value is string s)
+        {
+            sb.Append($"{pad}<string>{EscapeXml(s)}</string>\n");
+        }
+        else if (value is byte[] data)
+        {
+            sb.Append($"{pad}<data>{Convert.ToBase64String(data)}</data>\n");
+        }
+        else if (value is Dictionary<string, object> dict)
+        {
+            sb.Append($"{pad}<dict>\n");
+            foreach (var kvp in dict)
+            {
+                sb.Append($"{pad}  <key>{EscapeXml(kvp.Key)}</key>\n");
+                AppendPlistValue(sb, kvp.Value, indent + 2);
+            }
+            sb.Append($"{pad}</dict>\n");
+        }
+        else if (value is object[] arr)
+        {
+            sb.Append($"{pad}<array>\n");
+            foreach (var item in arr)
+            {
+                AppendPlistValue(sb, item, indent + 2);
+            }
+            sb.Append($"{pad}</array>\n");
+        }
+        else if (value is List<object> list)
+        {
+            sb.Append($"{pad}<array>\n");
+            foreach (var item in list)
+            {
+                AppendPlistValue(sb, item, indent + 2);
+            }
+            sb.Append($"{pad}</array>\n");
+        }
+        else
+        {
+            sb.Append($"{pad}<string>{EscapeXml(value.ToString() ?? "")}</string>\n");
+        }
     }
 
-    private Dictionary<string, string>? ParsePlistDict(string plist)
+    private static string EscapeXml(string s)
+    {
+        return s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;")
+                .Replace("\"", "&quot;").Replace("'", "&apos;");
+    }
+
+    /// <summary>
+    /// Parse Apple plist XML response into a flat string dictionary
+    /// Handles both Response-wrapped and direct dict responses
+    /// </summary>
+    private Dictionary<string, string>? ParseApplePlist(string plist)
     {
         try
         {
-            LogService.Info($"[Plist] 解析响应: {plist[..Math.Min(200, plist.Length)]}...");
+            LogService.Info($"[Plist] 解析响应...");
 
-            var doc = XDocument.Parse(plist);
+            // Strip XML prolog if present
+            var xml = plist;
+            var plistStart = xml.IndexOf("<plist");
+            if (plistStart >= 0) xml = xml[plistStart..];
+            var dictStart = xml.IndexOf("<dict");
+            if (dictStart >= 0) xml = xml[dictStart..];
+
+            var doc = System.Xml.Linq.XDocument.Parse($"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n{xml}\n</plist>");
             var root = doc.Root;
-            if (root == null)
-            {
-                LogService.Error("[Plist] 根元素为 null");
-                return null;
-            }
+            if (root == null) return null;
 
-            var dict = root.Element("dict");
-            if (dict == null)
-            {
-                LogService.Error("[Plist] dict 元素不存在");
-                return null;
-            }
-
-            var result = new Dictionary<string, string>();
-            var keys = dict.Elements("key").ToList();
-            var values = dict.Elements().Where(e => e.Name.LocalName != "key").ToList();
-
-            for (int i = 0; i < keys.Count && i < values.Count; i++)
-            {
-                result[keys[i].Value] = values[i].Value;
-            }
-
-            LogService.Info($"[Plist] 解析成功, {result.Count} 个字段");
-            foreach (var kvp in result)
-            {
-                LogService.Info($"  {kvp.Key} = {kvp.Value[..Math.Min(50, kvp.Value.Length)]}...");
-            }
-
-            return result;
+            var dict = root.Element("dict") ?? root;
+            return ParseDictElement(dict);
         }
         catch (Exception ex)
         {
             LogService.Error($"[Plist] 解析失败: {ex.Message}");
+            LogService.Error($"[Plist] 原始响应前500字符: {plist[..Math.Min(500, plist.Length)]}");
             return null;
         }
     }
 
-    // MARK: - 证书管理 (框架)
+    private Dictionary<string, string> ParseDictElement(System.Xml.Linq.XElement dict)
+    {
+        var result = new Dictionary<string, string>();
+        var elements = dict.Elements().ToList();
+
+        for (int i = 0; i < elements.Count; i++)
+        {
+            if (elements[i].Name.LocalName == "key")
+            {
+                var key = elements[i].Value;
+                i++;
+                if (i < elements.Count)
+                {
+                    var valElement = elements[i];
+                    string val;
+                    switch (valElement.Name.LocalName)
+                    {
+                        case "string":
+                        case "integer":
+                        case "real":
+                            val = valElement.Value;
+                            break;
+                        case "true":
+                            val = "true";
+                            break;
+                        case "false":
+                            val = "false";
+                            break;
+                        case "data":
+                            val = valElement.Value;
+                            break;
+                        case "dict":
+                            // For nested dicts (like Response), flatten with prefix
+                            var nested = ParseDictElement(valElement);
+                            foreach (var kvp in nested)
+                                result[kvp.Key] = kvp.Value;
+                            continue;
+                        case "array":
+                            // Array of strings
+                            var items = valElement.Elements("string").Select(e => e.Value).ToList();
+                            val = string.Join(",", items);
+                            break;
+                        default:
+                            val = valElement.Value;
+                            break;
+                    }
+                    result[key] = val;
+                }
+            }
+        }
+
+        LogService.Info($"[Plist] 解析成功, {result.Count} 个字段");
+        foreach (var kvp in result)
+        {
+            var preview = kvp.Value.Length > 50 ? kvp.Value[..50] : kvp.Value;
+            LogService.Info($"  {kvp.Key} = {preview}...");
+        }
+
+        return result;
+    }
+
+    // MARK: - Certificate Management (stubs)
 
     public Task<bool> RegisterDeviceAsync(string udid, string name)
     {
@@ -560,6 +615,6 @@ public class AppleGsaClient
 
     public void Dispose()
     {
-        try { _anisetteProcess?.Kill(); } catch { }
+        _http?.Dispose();
     }
 }

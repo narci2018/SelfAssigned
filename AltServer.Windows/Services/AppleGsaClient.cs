@@ -292,33 +292,28 @@ public class AppleGsaClient
         var result = new List<string>();
         var searchPaths = new[]
         {
-            @"C:\Program Files\Common Files\Apple",
-            @"C:\Program Files (x86)\Common Files\Apple",
+            @"C:\Program Files\Common Files\Apple\Apple Application Support",
+            @"C:\Program Files (x86)\Common Files\Apple\Apple Application Support",
             @"C:\Program Files\iTunes",
             @"C:\Program Files (x86)\iTunes",
-            @"C:\Program Files\Apple Mobile Device Support",
-            @"C:\Program Files (x86)\Apple Mobile Device Support",
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Common Files", "Apple"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Common Files", "Apple")
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Common Files", "Apple", "Apple Application Support"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Common Files", "Apple", "Apple Application Support")
         };
-
-        var neededDlls = new[] { "CoreADI.dll", "libCoreADI.dll", "AppleMobileDeviceService.dll", "CommonDLL.dll", "libstoreservicescore.dll" };
 
         foreach (var dir in searchPaths)
         {
             if (!Directory.Exists(dir)) continue;
             try
             {
-                foreach (var dll in neededDlls)
-                {
-                    var files = Directory.GetFiles(dir, dll, SearchOption.AllDirectories);
-                    result.AddRange(files);
-                }
+                // Copy ALL DLLs from Apple Application Support - anisette-server needs the full runtime
+                var dlls = Directory.GetFiles(dir, "*.dll", SearchOption.TopDirectoryOnly);
+                result.AddRange(dlls);
+                LogService.Info($"[Anisette] 从 {dir} 找到 {dlls.Length} 个 DLLs");
             }
             catch { }
         }
 
-        LogService.Info($"[Anisette] 找到 {result.Count} 个 Apple DLLs");
+        LogService.Info($"[Anisette] 共找到 {result.Count} 个 Apple DLLs");
         return result;
     }
 

@@ -78,7 +78,7 @@ public class AppleGsaClient
                 LogService.Error("[GSA] SRP Init 返回 null");
                 return AuthResult.Error("SRP 初始化失败 - 无法连接 Apple 服务器");
             }
-            LogService.Info($"[GSA] SRP Init 响应: ec={srpInit.TryGetValue("ec", out var ec) ? ec : "N/A"}");
+            LogService.Info($"[GSA] SRP Init 响应: ec={(srpInit.TryGetValue("ec", out var ec) ? ec : "N/A")}");
 
             // 检查错误码
             if (srpInit.TryGetValue("ec", out var initEc) && initEc != "0")

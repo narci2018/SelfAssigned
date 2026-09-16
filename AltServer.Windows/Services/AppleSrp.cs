@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
@@ -6,16 +5,15 @@ using System.Text;
 namespace AltServer.Windows.Services;
 
 /// <summary>
-/// Apple SRP-6a 实现 (基于 AltStore/gsa.py 源码)
+/// Apple SRP-6a 实现
 /// Apple 对标准 SRP 的修改:
-/// - k = sha256(N+g) (N, g 为 256 字节大端整数)
+/// - k = sha256(N+g)
 /// - x = H(":" + P) (不包含用户名)
 /// - 密码推导: P = PBKDF2(sha256(password), salt, iterations)
 /// </summary>
 public static class AppleSrp
 {
-    // 2048-bit SRP prime (来自 Apple corecrypto)
-    private static readonly byte[] N = HexToBytes(
+    private static readonly byte[] NBytes = HexToBytes(
         "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1" +
         "29024E088A67CC74020BBEA63B139B22514A08798E3404DDEF" +
         "9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485" +
@@ -28,18 +26,18 @@ public static class AppleSrp
         "7183995497CEA956AE515D2261898FA051015728E5A8AACAA" +
         "68FFFFFFFFFFFFFFFF");
 
-    private static readonly BigInteger g = BigInteger.Parse("2");
-    private static readonly int k = 3; // hash digest length in 32-byte blocks for 2048-bit
+    private static readonly BigInteger N = new BigInteger(NBytes.Reverse().Concat(new byte[] { 0 }).ToArray(), isUnsigned: true);
+    private static readonly BigInteger G = new BigInteger(new byte[] { 2 }, isUnsigned: true);
 
     /// <summary>
     /// 生成 SRP 客户端公钥 A
     /// </summary>
     public static byte[] GeneratePublicKey()
     {
-        var a = GenerateRandomBytes(32);
-        var bigN = new BigInteger(N.Reverse().Concat(new byte[] { 0 }).ToArray(), isUnsigned: true);
-        var A = BigInteger.ModPow(g, a, bigN);
-        return A.ToByteArray().Reverse().Take(256).ToArray().PadLeft(256, 0);
+        var a = new byte[32];
+        RandomNumberGenerator.Fill(a);
+        var bigA = BigInteger.ModPow(G, new BigInteger(a.Reverse().Concat(new byte[] { 0 }).ToArray(), isUnsigned: true), N);
+        return PadLeft(bigA.ToByteArray().Reverse().SkipWhile(b => b == 0).Concat(new byte[] { 0 }).ToArray(), 256);
     }
 
     /// <summary>
@@ -53,15 +51,13 @@ public static class AppleSrp
         var derivedKey = Rfc2898DeriveBytes.Pbkdf2(
             passwordHash, salt, iterations, HashAlgorithmName.SHA256, 32);
 
-        var bigN = new BigInteger(N.Reverse().Concat(new byte[] { 0 }).ToArray(), isUnsigned: true);
-
         // x = H(":" + derivedKey)
-        var xBytes = SHA256.HashData([0x3a, .. derivedKey]);
+        var xBytes = SHA256.HashData(new byte[] { 0x3a }.Concat(derivedKey).ToArray());
         var x = new BigInteger(xBytes.Reverse().Concat(new byte[] { 0 }).ToArray(), isUnsigned: true);
 
         // v = g^x mod N
-        var v = BigInteger.ModPow(g, x, bigN);
-        return v.ToByteArray().Reverse().Take(256).ToArray().PadLeft(256, 0);
+        var v = BigInteger.ModPow(G, x, N);
+        return PadLeft(v.ToByteArray().Reverse().SkipWhile(b => b == 0).Concat(new byte[] { 0 }).ToArray(), 256);
     }
 
     /// <summary>
@@ -70,36 +66,29 @@ public static class AppleSrp
     public static byte[] ComputeProof(byte[] salt, string password, byte[] A, byte[] B,
         byte[] serverProof, string username, int iterations = 10000)
     {
-        var bigN = new BigInteger(N.Reverse().Concat(new byte[] { 0 }).ToArray(), isUnsigned: true);
-
         // H(N) XOR H(g)
-        var hN = SHA256.HashData(N);
-        var hg = SHA256.HashData(g.ToByteArray().Reverse().Take(256).ToArray().PadLeft(256, 0));
+        var hN = SHA256.HashData(NBytes);
+        var gBytes = new byte[256];
+        gBytes[255] = 2;
+        var hg = SHA256.HashData(gBytes);
         var hNg = hN.Zip(hg, (a, b) => (byte)(a ^ b)).ToArray();
 
         var hUser = SHA256.HashData(Encoding.UTF8.GetBytes(username));
-
-        // H(A) + H(B)
         var hA = SHA256.HashData(A);
         var hB = SHA256.HashData(B);
 
         // M1 = H(hNg + hUser + salt + hA + hB + serverProof)
-        var proof = SHA256.HashData([.. hNg, .. hUser, .. salt, .. hA, .. hB, .. serverProof]);
+        var proof = SHA256.HashData(hNg.Concat(hUser).Concat(salt).Concat(hA).Concat(hB).Concat(serverProof).ToArray());
         return proof;
     }
 
     /// <summary>
-    /// 生成 Anisette 数据（占位符，需要从设备获取真实值）
+    /// 生成占位符 Anisette 数据
     /// </summary>
     public static AnisetteData GenerateAnisette()
     {
         var machineId = new byte[60];
         var oneTimePassword = new byte[28];
-        var localUserId = Guid.NewGuid().ToString("N")[..40];
-        var routingInfo = 1547392118L;
-        var deviceUniqueId = Guid.NewGuid().ToString("N")[..40];
-        var serialNumber = "F2LX1234ABCD";
-
         RandomNumberGenerator.Fill(machineId);
         RandomNumberGenerator.Fill(oneTimePassword);
 
@@ -107,18 +96,19 @@ public static class AppleSrp
         {
             MachineId = Convert.ToBase64String(machineId),
             OneTimePassword = Convert.ToBase64String(oneTimePassword),
-            LocalUserId = localUserId,
-            RoutingInfo = routingInfo,
-            DeviceUniqueId = deviceUniqueId,
-            SerialNumber = serialNumber
+            LocalUserId = Guid.NewGuid().ToString("N")[..40],
+            RoutingInfo = 1547392118L,
+            DeviceUniqueId = Guid.NewGuid().ToString("N")[..40],
+            SerialNumber = "F2LX1234ABCD"
         };
     }
 
-    private static byte[] GenerateRandomBytes(int count)
+    private static byte[] PadLeft(byte[] source, int totalLength)
     {
-        var bytes = new byte[count];
-        RandomNumberGenerator.Fill(bytes);
-        return bytes;
+        if (source.Length >= totalLength) return source;
+        var result = new byte[totalLength];
+        Buffer.BlockCopy(source, 0, result, totalLength - source.Length, source.Length);
+        return result;
     }
 
     private static byte[] HexToBytes(string hex)
@@ -129,9 +119,6 @@ public static class AppleSrp
     }
 }
 
-/// <summary>
-/// Anisette 数据结构
-/// </summary>
 public class AnisetteData
 {
     public string MachineId { get; set; } = string.Empty;

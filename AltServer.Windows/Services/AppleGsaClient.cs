@@ -224,7 +224,7 @@ public class AppleGsaClient : IDisposable
                     if (url == "https://ani.sidestore.io/")
                     {
                         // Root URL returns Anisette directly via GET
-                        using var getHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                        using var getHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
                         getHttp.DefaultRequestHeaders.Add("X-MMe-Client-Info",
                             "<MacBookPro13,2> <macOS;13.1;22C65> <com.apple.AuthKit/1 (com.apple.dt.Xcode/3594.4.19)>");
                         response = await getHttp.GetStringAsync(url);
@@ -232,12 +232,15 @@ public class AppleGsaClient : IDisposable
                     else
                     {
                         // v3 endpoint requires POST with empty body
-                        using var postHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                        using var postHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
                         postHttp.DefaultRequestHeaders.Add("X-MMe-Client-Info",
                             "<MacBookPro13,2> <macOS;13.1;22C65> <com.apple.AuthKit/1 (com.apple.dt.Xcode/3594.4.19)>");
                         var postResponse = await postHttp.PostAsync(url, null);
+                        LogService.Info($"[Anisette] v3 POST 响应: {postResponse.StatusCode}");
                         if (postResponse.IsSuccessStatusCode)
                             response = await postResponse.Content.ReadAsStringAsync();
+                        else
+                            LogService.Error($"[Anisette] v3 POST 失败: {await postResponse.Content.ReadAsStringAsync()}");
                     }
 
                     if (response == null) continue;

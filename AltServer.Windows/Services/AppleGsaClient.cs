@@ -3,6 +3,7 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Net.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -33,6 +34,8 @@ public class AppleGsaClient
     {
         _toolsDir = toolsDir;
         _dataDir = dataDir;
+
+        System.Net.ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;
 
         var handler = new HttpClientHandler
         {
@@ -166,14 +169,46 @@ public class AppleGsaClient
             {
                 LogService.Info($"[Anisette] 启动 anisette-server: {anisetteServer}");
 
+                // Create working directory with all dependencies
+                var workDir = Path.Combine(_dataDir, "anisette-work");
+                if (Directory.Exists(workDir)) Directory.Delete(workDir, true);
+                Directory.CreateDirectory(workDir);
+                File.Copy(anisetteServer, Path.Combine(workDir, "anisette-server.exe"), true);
+
+                // Find and copy Apple DLLs from iTunes installation
+                LogService.Info("[Anisette] 搜索 Apple DLLs...");
+                var appleDlls = FindAppleDlls();
+                foreach (var dll in appleDlls)
+                {
+                    var dest = Path.Combine(workDir, Path.GetFileName(dll));
+                    try
+                    {
+                        File.Copy(dll, dest, true);
+                        LogService.Info($"  OK: {Path.GetFileName(dll)}");
+                    }
+                    catch { }
+                }
+
+                // Copy OpenSSL DLLs from tools dir
+                foreach (var dll in Directory.GetFiles(_toolsDir, "lib*.dll"))
+                {
+                    try
+                    {
+                        File.Copy(dll, Path.Combine(workDir, Path.GetFileName(dll)), true);
+                        LogService.Info($"  OK OpenSSL: {Path.GetFileName(dll)}");
+                    }
+                    catch { }
+                }
+
                 var psi = new ProcessStartInfo
                 {
-                    FileName = anisetteServer,
+                    FileName = Path.Combine(workDir, "anisette-server.exe"),
                     Arguments = "-p 6969",
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
-                    CreateNoWindow = true
+                    CreateNoWindow = true,
+                    WorkingDirectory = workDir
                 };
 
                 _anisetteProcess = Process.Start(psi);
@@ -252,6 +287,41 @@ public class AppleGsaClient
         return AppleSrp.GenerateAnisette();
     }
 
+    private List<string> FindAppleDlls()
+    {
+        var result = new List<string>();
+        var searchPaths = new[]
+        {
+            @"C:\Program Files\Common Files\Apple",
+            @"C:\Program Files (x86)\Common Files\Apple",
+            @"C:\Program Files\iTunes",
+            @"C:\Program Files (x86)\iTunes",
+            @"C:\Program Files\Apple Mobile Device Support",
+            @"C:\Program Files (x86)\Apple Mobile Device Support",
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Common Files", "Apple"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Common Files", "Apple")
+        };
+
+        var neededDlls = new[] { "CoreADI.dll", "libCoreADI.dll", "AppleMobileDeviceService.dll", "CommonDLL.dll", "libstoreservicescore.dll" };
+
+        foreach (var dir in searchPaths)
+        {
+            if (!Directory.Exists(dir)) continue;
+            try
+            {
+                foreach (var dll in neededDlls)
+                {
+                    var files = Directory.GetFiles(dir, dll, SearchOption.AllDirectories);
+                    result.AddRange(files);
+                }
+            }
+            catch { }
+        }
+
+        LogService.Info($"[Anisette] 找到 {result.Count} 个 Apple DLLs");
+        return result;
+    }
+
     // MARK: - SRP
 
     private async Task<Dictionary<string, string>?> SrpInitAsync(string appleId)
@@ -298,6 +368,18 @@ public class AppleGsaClient
             Content = new StringContent(plistStr, Encoding.UTF8, "text/x-xml-plist")
         };
         request.Headers.Add("User-Agent", "akd/1.0 CFNetwork/978.0.7 Darwin/18.7.0");
+
+        // Add Anisette as HTTP headers too (some servers check both)
+        if (_anisette != null)
+        {
+            request.Headers.Add("X-Apple-I-MD", _anisette.OneTimePassword);
+            request.Headers.Add("X-Apple-I-MD-M", _anisette.MachineId);
+            request.Headers.Add("X-Apple-I-MD-LU", _anisette.LocalUserId);
+            request.Headers.Add("X-Apple-I-MD-RINFO", _anisette.RoutingInfo.ToString());
+            request.Headers.Add("X-Mme-Device-Id", _anisette.DeviceUniqueId);
+            request.Headers.Add("X-Apple-I-SRL-NO", _anisette.SerialNumber);
+            request.Headers.Add("X-Apple-I-Client-Time", DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"));
+        }
 
         LogService.Info("[SRP] 发送请求...");
         var response = await _http.SendAsync(request);

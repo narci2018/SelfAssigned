@@ -105,10 +105,20 @@ jobs:
           if ($zf) { Copy-Item $zf.FullName $toolsDir -Force; Write-Host "  OK zsign.exe" } else { Write-Host "  MISSING zsign.exe" }
           Get-ChildItem "$dlDir\zsign" -Recurse -Filter "*.dll" | ForEach-Object { Copy-Item $_.FullName $toolsDir -Force -EA SilentlyContinue }
 
+          Write-Host "=== 下载 anisette-server ==="
+          $anisetteApi = "https://api.github.com/repos/Dadoum/Provision/releases/latest"
+          $anisetteRelease = Invoke-RestMethod -Uri $anisetteApi -UseBasicParsing -TimeoutSec 30
+          $anisetteAsset = $anisetteRelease.assets | Where-Object { $_.name -like "*x86_64.exe" } | Select-Object -First 1
+          if ($anisetteAsset) {
+            Write-Host "  URL: $($anisetteAsset.browser_download_url)"
+            curl.exe -L --silent --fail -o "$toolsDir\anisette-server.exe" $anisetteAsset.browser_download_url
+            if (Test-Path "$toolsDir\anisette-server.exe") { Write-Host "  OK anisette-server.exe" } else { Write-Host "  MISSING anisette-server.exe" }
+          } else { Write-Host "  anisette-server asset not found" }
+
           Remove-Item "$dlDir" -Recurse -Force -EA SilentlyContinue
 
           Write-Host "=== 验证 ==="
-          foreach ($t in @("idevice_id.exe","ideviceinfo.exe","ideviceinstaller.exe","idevicepair.exe","zsign.exe")) {
+          foreach ($t in @("idevice_id.exe","ideviceinfo.exe","ideviceinstaller.exe","idevicepair.exe","zsign.exe","anisette-server.exe")) {
             $p = Join-Path $toolsDir $t
             if (Test-Path $p) { $s = [math]::Round((Get-Item $p).Length/1KB,1); Write-Host "  $t ($s KB)" }
             else { Write-Host "  MISSING: $t" }

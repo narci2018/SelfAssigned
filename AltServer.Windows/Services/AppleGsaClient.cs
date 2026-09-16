@@ -184,23 +184,64 @@ public class AppleGsaClient
 
     private async Task<AnisetteData?> GetAnisetteAsync()
     {
-        // 尝试从本地 iTunes 获取 Anisette
+        // 方案1: 从 anisette-server 获取真实 Anisette 数据
         try
         {
-            var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            var appleFolder = Path.Combine(localAppData, "Apple", "Lockdown");
-            if (Directory.Exists(appleFolder))
+            var anisetteServer = Path.Combine(_toolsDir, "anisette-server.exe");
+            if (File.Exists(anisetteServer))
             {
-                var records = Directory.GetFiles(appleFolder, "*.plist");
-                if (records.Length > 0)
+                LogService.Info("Found anisette-server.exe, launching...");
+
+                // 启动 anisette-server 作为后台进程
+                var psi = new ProcessStartInfo
                 {
-                    LogService.Info($"Found {records.Length} Apple Lockdown records, attempting Anisette extraction...");
+                    FileName = anisetteServer,
+                    Arguments = "-p 6969",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    CreateNoWindow = true
+                };
+
+                var process = Process.Start(psi);
+                if (process != null)
+                {
+                    // 等待服务器启动
+                    await Task.Delay(3000);
+
+                    // 从服务器获取 Anisette 数据
+                    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                    var response = await http.GetStringAsync("http://localhost:6969/get_headers?udid=-2");
+                    LogService.Info($"Anisette response: {response}");
+
+                    // 解析 JSON 响应
+                    var json = System.Text.Json.JsonDocument.Parse(response);
+                    var root = json.RootElement;
+
+                    var anisette = new AnisetteData
+                    {
+                        OneTimePassword = root.TryGetProperty("X-Apple-I-MD", out var md) ? md.GetString() ?? "" : "",
+                        MachineId = root.TryGetProperty("X-Apple-I-MD-M", out var mdm) ? mdm.GetString() ?? "" : "",
+                        RoutingInfo = root.TryGetProperty("X-Apple-I-MD-RINFO", out var rinfo) ? long.Parse(rinfo.GetString() ?? "17106176") : 17106176,
+                        LocalUserId = "-2",
+                        DeviceUniqueId = Guid.NewGuid().ToString("N")[..40],
+                        SerialNumber = "F2LX1234ABCD"
+                    };
+
+                    // 停止 anisette-server
+                    try { process.Kill(); } catch { }
+
+                    LogService.Info($"Got real Anisette: OTP={anisette.OneTimePassword[..Math.Min(20, anisette.OneTimePassword.Length)]}...");
+                    return anisette;
                 }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            LogService.Info($"Anisette server failed: {ex.Message}");
+        }
 
-        // 返回占位符 Anisette（实际需要从设备获取）
+        // 方案2: 回退到占位符
+        LogService.Info("Using placeholder Anisette (authentication may fail)");
         return AppleSrp.GenerateAnisette();
     }
 

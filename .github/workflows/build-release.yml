@@ -115,6 +115,28 @@ jobs:
             if (Test-Path "$toolsDir\anisette-server.exe") { Write-Host "  OK anisette-server.exe" } else { Write-Host "  MISSING anisette-server.exe" }
           } else { Write-Host "  anisette-server asset not found" }
 
+          Write-Host "=== 下载 OpenSSL (anisette-server 依赖) ==="
+          $sslUrl = "https://slproweb.com/download/Win64OpenSSL-3_1_4.exe"
+          curl.exe -L --silent --fail -o "$dlDir\openssl-installer.exe" $sslUrl
+          if (Test-Path "$dlDir\openssl-installer.exe") {
+            Write-Host "  下载 OpenSSL 安装程序"
+            # 提取 OpenSSL DLLs
+            $sslDlls = @("libssl-3-x64.dll", "libcrypto-3-x64.dll", "libssl-3.dll", "libcrypto-3.dll")
+            # 尝试从常见路径复制
+            $sslPaths = @(
+              "C:\Program Files\OpenSSL-Win64\bin",
+              "C:\Program Files (x86)\OpenSSL-Win64\bin",
+              "$env:ProgramFiles\OpenSSL\bin"
+            )
+            foreach ($sp in $sslPaths) {
+              if (Test-Path $sp) {
+                Get-ChildItem "$sp\*.dll" | ForEach-Object { Copy-Item $_.FullName $toolsDir -Force -EA SilentlyContinue }
+                Write-Host "  从 $sp 复制 OpenSSL DLLs"
+                break
+              }
+            }
+          }
+
           Remove-Item "$dlDir" -Recurse -Force -EA SilentlyContinue
 
           Write-Host "=== 验证 ==="

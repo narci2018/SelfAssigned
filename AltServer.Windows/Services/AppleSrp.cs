@@ -96,9 +96,9 @@ public static class AppleSrp
         {
             MachineId = Convert.ToBase64String(machineId),
             OneTimePassword = Convert.ToBase64String(oneTimePassword),
-            LocalUserId = Guid.NewGuid().ToString("N")[..40],
+            LocalUserId = Guid.NewGuid().ToString("N")[..32],
             RoutingInfo = 1547392118L,
-            DeviceUniqueId = Guid.NewGuid().ToString("N")[..40],
+            DeviceUniqueId = Guid.NewGuid().ToString("N")[..32],
             SerialNumber = "F2LX1234ABCD"
         };
     }

@@ -179,25 +179,32 @@ public class AppleGsaClient
                 _anisetteProcess = Process.Start(psi);
                 if (_anisetteProcess != null)
                 {
-                    LogService.Info("[Anisette] 等待服务器启动 (5s)...");
-                    await Task.Delay(5000);
+                    // 读取输出的后台任务
+                    var stdoutTask = _anisetteProcess.StandardOutput.ReadToEndAsync();
+                    var stderrTask = _anisetteProcess.StandardError.ReadToEndAsync();
 
-                    // 检查进程是否还在运行
-                    if (_anisetteProcess.HasExited)
+                    // 重试等待服务器启动
+                    LogService.Info("[Anisette] 等待服务器启动 (最多 15s)...");
+                    for (int i = 0; i < 15; i++)
                     {
-                        LogService.Error($"[Anisette] anisette-server 已退出, exit code: {_anisetteProcess.ExitCode}");
-                        var stderr = await _anisetteProcess.StandardError.ReadToEndAsync();
-                        LogService.Error($"[Anisette] stderr: {stderr}");
-                    }
-                    else
-                    {
-                        LogService.Info("[Anisette] 请求 Anisette 数据...");
-                        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+                        await Task.Delay(1000);
 
+                        if (_anisetteProcess.HasExited)
+                        {
+                            var stdout = await stdoutTask;
+                            var stderr = await stderrTask;
+                            LogService.Error($"[Anisette] 服务器已退出 (exit={_anisetteProcess.ExitCode})");
+                            LogService.Error($"[Anisette] stdout: {stdout}");
+                            LogService.Error($"[Anisette] stderr: {stderr}");
+                            break;
+                        }
+
+                        // 尝试连接
                         try
                         {
-                            var response = await http.GetStringAsync("http://localhost:6969/get_headers?udid=-2");
-                            LogService.Info($"[Anisette] 原始响应: {response}");
+                            using var testHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+                            var response = await testHttp.GetStringAsync("http://localhost:6969/get_headers?udid=-2");
+                            LogService.Info($"[Anisette] 服务器就绪, 获取数据...");
 
                             var json = JsonDocument.Parse(response);
                             var root = json.RootElement;
@@ -208,25 +215,26 @@ public class AppleGsaClient
                                 MachineId = root.TryGetProperty("X-Apple-I-MD-M", out var mdm) ? mdm.GetString() ?? "" : "",
                                 RoutingInfo = root.TryGetProperty("X-Apple-I-MD-RINFO", out var rinfo) ? long.TryParse(rinfo.GetString(), out var ri) ? ri : 17106176 : 17106176,
                                 LocalUserId = "-2",
-                                DeviceUniqueId = Guid.NewGuid().ToString("N")[..40],
+                                DeviceUniqueId = Guid.NewGuid().ToString("N")[..32],
                                 SerialNumber = "F2LX1234ABCD"
                             };
 
-                            LogService.Info($"[Anisette] 成功获取: OTP长度={anisette.OneTimePassword.Length}, MachineId长度={anisette.MachineId.Length}");
+                            LogService.Info($"[Anisette] 成功! OTP={anisette.OneTimePassword[..Math.Min(20, anisette.OneTimePassword.Length)]}...");
+                            try { _anisetteProcess.Kill(); } catch { }
                             return anisette;
                         }
-                        catch (Exception ex)
+                        catch
                         {
-                            LogService.Error($"[Anisette] HTTP 请求失败: {ex.Message}");
+                            // 还没就绪，继续等
                         }
-
-                        // 停止服务器
-                        try { _anisetteProcess.Kill(); } catch { }
                     }
+
+                    // 超时或失败
+                    try { _anisetteProcess.Kill(); } catch { }
                 }
                 else
                 {
-                    LogService.Error("[Anisette] 无法启动 anisette-server 进程");
+                    LogService.Error("[Anisette] 无法启动进程");
                 }
             }
             else

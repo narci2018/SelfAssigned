@@ -559,6 +559,7 @@ public class AuthResult
     public static AuthResult RequiresNotification => new() { Status = AuthStatus.RequiresNotification };
     public static AuthResult AccountLocked => new() { Status = AuthStatus.AccountLocked };
     public static AuthResult TooManyAttempts => new() { Status = AuthStatus.TooManyAttempts };
+    public static AuthResult Error(string message) => new() { Status = AuthStatus.Error, Message = message };
 
     public AuthStatus Status { get; set; }
     public string Message { get; set; } = string.Empty;
@@ -570,7 +571,8 @@ public enum AuthStatus
     Requires2FA,
     RequiresNotification,
     AccountLocked,
-    TooManyAttempts
+    TooManyAttempts,
+    Error
 }
 
 public class AppleAuthException : Exception

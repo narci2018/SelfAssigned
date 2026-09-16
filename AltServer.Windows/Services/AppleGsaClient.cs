@@ -42,6 +42,7 @@ public class AppleGsaClient : IDisposable
     // Remote Anisette servers (tried in order)
     private static readonly string[] AnisetteUrls = new[]
     {
+        "https://ani.sidestore.io/",
         "https://ani.sidestore.io/v3/get_headers"
     };
 
@@ -212,15 +213,35 @@ public class AppleGsaClient : IDisposable
         // Method 1: Remote Anisette server
         try
         {
-            using var testHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-            testHttp.DefaultRequestHeaders.UserAgent.ParseAdd("AltServer/1.0");
-
             foreach (var url in AnisetteUrls)
             {
                 try
                 {
                     LogService.Info($"[Anisette] 尝试远程服务器: {url}");
-                    var response = await testHttp.GetStringAsync(url);
+
+                    string? response = null;
+
+                    if (url == "https://ani.sidestore.io/")
+                    {
+                        // Root URL returns Anisette directly via GET
+                        using var getHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                        getHttp.DefaultRequestHeaders.Add("X-MMe-Client-Info",
+                            "<MacBookPro13,2> <macOS;13.1;22C65> <com.apple.AuthKit/1 (com.apple.dt.Xcode/3594.4.19)>");
+                        response = await getHttp.GetStringAsync(url);
+                    }
+                    else
+                    {
+                        // v3 endpoint requires POST with empty body
+                        using var postHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                        postHttp.DefaultRequestHeaders.Add("X-MMe-Client-Info",
+                            "<MacBookPro13,2> <macOS;13.1;22C65> <com.apple.AuthKit/1 (com.apple.dt.Xcode/3594.4.19)>");
+                        var postResponse = await postHttp.PostAsync(url, null);
+                        if (postResponse.IsSuccessStatusCode)
+                            response = await postResponse.Content.ReadAsStringAsync();
+                    }
+
+                    if (response == null) continue;
+
                     LogService.Info($"[Anisette] 服务器响应长度: {response.Length}");
 
                     var json = JsonDocument.Parse(response);

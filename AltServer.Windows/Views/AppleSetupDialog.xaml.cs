@@ -63,8 +63,9 @@ public partial class AppleSetupDialog : Window
 
             // 步骤2: 登录 Apple ID
             StatusText.Text = "步骤 2/5: 登录 Apple ID...";
-            var provisionService = new AppleProvisionService(_dataDir);
-            var authResult = await provisionService.SignInAsync(appleId, password);
+            var settings = new SettingsService();
+            var grandslam = new AppleGrandslamClient(settings.ResolveToolsDir());
+            var authResult = await grandslam.AuthenticateAsync(appleId, password);
 
             if (authResult.Status == AuthStatus.Requires2FA)
             {
@@ -72,39 +73,25 @@ public partial class AppleSetupDialog : Window
                 StatusText.Text = "步骤 2/5: 请在设备上确认双重认证...";
                 await Task.Delay(2000);
             }
-
-            // 步骤3: 注册设备
-            StatusText.Text = "步骤 3/5: 注册设备到 Apple...";
-
-            // 步骤4: 创建证书
-            StatusText.Text = "步骤 4/5: 创建代码签名证书...";
-            var bundleId = $"com.altserver.{DateTime.Now:yyyyMMdd}";
-            var result = await provisionService.AutoProvisionAsync(
-                bundleId,
-                "AltStore App",
-                devices[0].Name,
-                devices[0].Udid);
-
-            if (!result.Success)
+            else if (authResult.Status == AuthStatus.Error)
             {
-                ShowError($"证书创建失败: {result.ErrorMessage}\n\n如果你不是付费开发者，需要手动提供 .p12 和 .mobileprovision 文件。");
+                ShowError(authResult.Message);
                 return;
             }
 
-            // 步骤5: 保存配置
-            StatusText.Text = "步骤 5/5: 保存配置...";
+            // 步骤3: 设备已就绪
+            StatusText.Text = "步骤 3/5: 设备授权完成...";
+
+            // 步骤4: 保存 Apple ID 配置
+            StatusText.Text = "步骤 4/5: 保存配置...";
             settings.Data.AppleId = appleId;
-            settings.Data.P12Path = result.P12Path;
-            settings.Data.P12Password = "temp123";
-            settings.Data.MobileProvisionPath = result.ProvisionPath;
             settings.Save();
 
-            ResultP12Path = result.P12Path;
-            ResultProvisionPath = result.ProvisionPath;
-            ResultP12Password = "temp123";
+            // 步骤5: 完成
+            StatusText.Text = "步骤 5/5: 完成...";
             _completed = true;
 
-            StatusText.Text = "✅ 配置完成! 签名证书和配置文件已自动设置";
+            StatusText.Text = "✅ Apple ID 登录成功! 设备已授权，可以开始安装应用";
             StatusText.Foreground = new System.Windows.Media.SolidColorBrush(
                 System.Windows.Media.Color.FromRgb(0x16, 0xA3, 0x4A));
 

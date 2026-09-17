@@ -22,6 +22,8 @@ public partial class ApplePortalClient
 
     public ApplePortalClient()
     {
+        ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;
+
         _cookies = new CookieContainer();
         var handler = new HttpClientHandler
         {

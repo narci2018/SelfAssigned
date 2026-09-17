@@ -469,25 +469,27 @@ public class AppleGsaClient : IDisposable
                 return null;
             }
 
-            // Apple et format: [3-byte magic][16-byte IV][ciphertext][16-byte GCM tag]
-            // Total = 3 + 16 + N + 16 = N + 35
-            var magic = et[..3];  // "XYZ" or similar
-            var iv = et[3..19];   // 16 bytes IV
-            var ciphertextWithAuthTag = et[19..];  // Last 16 bytes are the GCM tag
+            // 1. 优先使用 asrp64.dll (爱思助手原生 Apple GCM 解密组件)
+            var plain = DecryptWithAsrp(_sessionKey, et);
 
-            // Split ciphertext and auth tag
-            var ciphertext = ciphertextWithAuthTag[..^16];
-            var authTag = ciphertextWithAuthTag[^16..];
-
-            LogService.Info($"[GSA] apptokens magic: {BitConverter.ToString(magic)}");
-            LogService.Info($"[GSA] apptokens iv length: {iv.Length}, ciphertext length: {ciphertext.Length}, tag length: {authTag.Length}");
-            LogService.Info($"[GSA] apptokens iv hex: {BitConverter.ToString(iv)}");
-            LogService.Info($"[GSA] apptokens authTag hex: {BitConverter.ToString(authTag)}");
-
-            var plain = AesGcmDecrypt(_sessionKey, iv, ciphertext, authTag, magic);
+            // 2. 如果 asrp64.dll 不可用，回退至 CNG / AesGcm
             if (plain == null)
             {
-                LogService.Error($"[GSA] apptokens AES-GCM 解密失败 - keyLen={_sessionKey.Length}, ivLen={iv.Length}, ctLen={ciphertext.Length}, tagLen={authTag.Length}");
+                var magic = et[..3];  // "XYZ" or similar
+                var iv = et[3..19];   // 16 bytes IV
+                var ciphertextWithAuthTag = et[19..];  // Last 16 bytes are the GCM tag
+
+                var ciphertext = ciphertextWithAuthTag[..^16];
+                var authTag = ciphertextWithAuthTag[^16..];
+
+                LogService.Info($"[GSA] apptokens magic: {BitConverter.ToString(magic)}");
+                LogService.Info($"[GSA] apptokens iv length: {iv.Length}, ciphertext length: {ciphertext.Length}, tag length: {authTag.Length}");
+                plain = AesGcmDecrypt(_sessionKey, iv, ciphertext, authTag, magic);
+            }
+
+            if (plain == null)
+            {
+                LogService.Error($"[GSA] apptokens AES-GCM 解密失败 - keyLen={_sessionKey.Length}, etLen={et.Length}");
                 return null;
             }
 
@@ -505,6 +507,96 @@ public class AppleGsaClient : IDisposable
         catch (Exception ex)
         {
             LogService.Error($"[GSA] apptokens 异常: {ex.Message}");
+            return null;
+        }
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    private static extern IntPtr LoadLibrary(string lpFileName);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true)]
+    private static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int AesGcmDecryptFn(byte[] key, int keyLen, byte[] et, int etLen, out IntPtr outPtr);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void AsrpFreeFn(IntPtr ptr);
+
+    private static IntPtr _asrpModule = IntPtr.Zero;
+    private static AesGcmDecryptFn? _asrpDecrypt;
+    private static AsrpFreeFn? _asrpFree;
+    private static readonly object _asrpLock = new();
+
+    private string? FindAsrpDll()
+    {
+        var candidates = new[]
+        {
+            Path.Combine(_toolsDir, "asrp64.dll"),
+            Path.Combine(AppContext.BaseDirectory, "tools", "asrp64.dll"),
+            Path.Combine(AppContext.BaseDirectory, "asrp64.dll"),
+            @"C:\Program Files\i4Tools9\asrp64.dll",
+            @"C:\Program Files\i4Tools9\iTunesdll\asrp64.dll",
+            @"C:\Program Files\i4Tools9\iCloudDll\asrp.dll",
+        };
+
+        foreach (var p in candidates)
+        {
+            if (File.Exists(p)) return p;
+        }
+        return null;
+    }
+
+    private byte[]? DecryptWithAsrp(byte[] key, byte[] et)
+    {
+        try
+        {
+            lock (_asrpLock)
+            {
+                if (_asrpModule == IntPtr.Zero)
+                {
+                    var dllPath = FindAsrpDll();
+                    if (string.IsNullOrEmpty(dllPath))
+                    {
+                        LogService.Warning("[GSA] 未找到 asrp64.dll，将使用备用解密方案");
+                        return null;
+                    }
+
+                    _asrpModule = LoadLibrary(dllPath);
+                    if (_asrpModule == IntPtr.Zero)
+                    {
+                        LogService.Warning($"[GSA] 加载 asrp64.dll 失败: {dllPath}");
+                        return null;
+                    }
+
+                    var pDecrypt = GetProcAddress(_asrpModule, "aes_gcm_decrypt");
+                    var pFree = GetProcAddress(_asrpModule, "asrp_free");
+                    if (pDecrypt != IntPtr.Zero)
+                        _asrpDecrypt = (AesGcmDecryptFn)Marshal.GetDelegateForFunctionPointer(pDecrypt, typeof(AesGcmDecryptFn));
+                    if (pFree != IntPtr.Zero)
+                        _asrpFree = (AsrpFreeFn)Marshal.GetDelegateForFunctionPointer(pFree, typeof(AsrpFreeFn));
+                    LogService.Info($"[GSA] 成功加载 asrp64.dll: {dllPath}");
+                }
+            }
+
+            if (_asrpDecrypt == null) return null;
+
+            int res = _asrpDecrypt(key, key.Length, et, et.Length, out IntPtr outPtr);
+            if (res > 0 && outPtr != IntPtr.Zero)
+            {
+                byte[] plain = new byte[res];
+                Marshal.Copy(outPtr, plain, 0, res);
+                _asrpFree?.Invoke(outPtr);
+                LogService.Info($"[GSA] asrp64.dll aes_gcm_decrypt 解密成功，明文长度: {plain.Length}");
+                return plain;
+            }
+
+            LogService.Warning($"[GSA] asrp64.dll aes_gcm_decrypt 返回错误码: {res}");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            LogService.Error($"[GSA] asrp64 解密异常: {ex.Message}");
             return null;
         }
     }

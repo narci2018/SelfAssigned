@@ -127,10 +127,17 @@ jobs:
             Write-Host "  OK CoreADI.dll ($sz MB) -> $coreAdiDst"
           } else { Write-Host "  MISSING committed CoreADI.dll at $coreAdiSrc" }
 
+          Write-Host "=== 复制 asrp64.dll (AES-GCM/SRP 解密库) ==="
+          $asrpSrc = "AltServer.Windows\tools\asrp64.dll"
+          if (Test-Path $asrpSrc) {
+            Copy-Item $asrpSrc (Join-Path $toolsDir "asrp64.dll") -Force
+            Write-Host "  OK asrp64.dll -> $toolsDir\asrp64.dll"
+          } else { Write-Host "  MISSING asrp64.dll at $asrpSrc" }
+
           Remove-Item "$dlDir" -Recurse -Force -EA SilentlyContinue
 
           Write-Host "=== 验证 ==="
-          foreach ($t in @("idevice_id.exe","ideviceinfo.exe","ideviceinstaller.exe","idevicepair.exe","zsign.exe")) {
+          foreach ($t in @("idevice_id.exe","ideviceinfo.exe","ideviceinstaller.exe","idevicepair.exe","zsign.exe","asrp64.dll")) {
             $p = Join-Path $toolsDir $t
             if (Test-Path $p) { $s = [math]::Round((Get-Item $p).Length/1KB,1); Write-Host "  $t ($s KB)" }
             else { Write-Host "  MISSING: $t" }

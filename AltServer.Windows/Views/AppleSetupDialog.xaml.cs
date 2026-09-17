@@ -289,13 +289,14 @@ public partial class AppleSetupDialog : Window
         SubmitBtn.IsEnabled = true;
 
         AuthStatusBorder.Visibility = Visibility.Visible;
-        AuthStatusText.Text = "Apple ID login successful!";
-        AuthStatusHint.Text = "Please provide code signing certificate (.p12) and provisioning profile (.mobileprovision), or configure later in settings";
+        AuthStatusText.Text = "Apple ID 认证成功！";
+        AuthStatusHint.Text = "已验证 Apple ID 身份。若自动生成受限（如账号需同意开发者协议），请在此指定证书与描述文件，或稍后在设置中配置。";
 
         try
         {
             var discovery = new SigningDiscoveryService();
             var certs = discovery.DiscoverP12Files();
+            var storeCerts = discovery.DiscoverCertificates();
             var provisions = discovery.DiscoverProvisionProfiles();
 
             if (certs.Count > 0 && string.IsNullOrEmpty(P12PathBox.Text))
@@ -303,6 +304,12 @@ public partial class AppleSetupDialog : Window
                 P12PathBox.Text = certs[0].Thumbprint;
                 LogService.Info($"[Setup] 自动预填本地发现的证书: {certs[0].Subject} ({certs[0].Thumbprint})");
             }
+            else if (storeCerts.Count > 0 && string.IsNullOrEmpty(P12PathBox.Text))
+            {
+                P12PathBox.Text = storeCerts[0].Thumbprint;
+                LogService.Info($"[Setup] 自动预填系统证书库证书: {storeCerts[0].Subject} ({storeCerts[0].Thumbprint})");
+            }
+
             if (provisions.Count > 0 && string.IsNullOrEmpty(ProvisionPathBox.Text))
             {
                 ProvisionPathBox.Text = provisions[0].Path;

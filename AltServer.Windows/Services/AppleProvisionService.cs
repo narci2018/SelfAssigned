@@ -223,13 +223,20 @@ public class AppleProvisionService
         return teams;
     }
 
+    private const string PORTAL_BASE_URL = "https://developer.apple.com/services-account/QH65B2/account";
+
     private async Task RegisterDeviceAsync(string name, string udid)
     {
-        var request = new HttpRequestMessage(HttpMethod.Post,
-            $"https://developer.apple.com/account/resources/devices/add?teamId={_adsId}");
+        var request = new HttpRequestMessage(HttpMethod.Post, $"{PORTAL_BASE_URL}/resources/addDevice");
         AddPortalHeaders(request);
-        var body = JsonSerializer.Serialize(new { name, udid, platform = "IOS" });
-        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        var form = new Dictionary<string, string>
+        {
+            ["teamId"] = _adsId ?? "",
+            ["name"] = name,
+            ["deviceNumber"] = udid,
+            ["platform"] = "ios"
+        };
+        request.Content = new FormUrlEncodedContent(form);
         var response = await _http.SendAsync(request);
         var responseBody = await response.Content.ReadAsStringAsync();
 
@@ -239,11 +246,17 @@ public class AppleProvisionService
 
     private async Task RegisterBundleIdAsync(string bundleIdentifier, string name)
     {
-        var request = new HttpRequestMessage(HttpMethod.Post,
-            $"https://developer.apple.com/account/resources/identifiers/add?teamId={_adsId}");
+        var request = new HttpRequestMessage(HttpMethod.Post, $"{PORTAL_BASE_URL}/resources/registerAppId");
         AddPortalHeaders(request);
-        var body = JsonSerializer.Serialize(new { identifier = bundleIdentifier, name, type = "app", platform = "ios" });
-        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        var form = new Dictionary<string, string>
+        {
+            ["teamId"] = _adsId ?? "",
+            ["identifier"] = bundleIdentifier,
+            ["name"] = name,
+            ["type"] = "explicit",
+            ["capabilities"] = "1"
+        };
+        request.Content = new FormUrlEncodedContent(form);
         var response = await _http.SendAsync(request);
         var responseBody = await response.Content.ReadAsStringAsync();
 
@@ -253,11 +266,15 @@ public class AppleProvisionService
 
     private async Task<PortalCertificate> CreateCertificateAsync(string csrContent)
     {
-        var request = new HttpRequestMessage(HttpMethod.Post,
-            $"https://developer.apple.com/account/resources/certificates/add?teamId={_adsId}");
+        var request = new HttpRequestMessage(HttpMethod.Post, $"{PORTAL_BASE_URL}/resources/addCertificate");
         AddPortalHeaders(request);
-        var body = JsonSerializer.Serialize(new { csrContent, certificateType = "IOS_DEVELOPMENT" });
-        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        var form = new Dictionary<string, string>
+        {
+            ["teamId"] = _adsId ?? "",
+            ["csrContent"] = csrContent,
+            ["certificateType"] = "IOS_DEVELOPMENT"
+        };
+        request.Content = new FormUrlEncodedContent(form);
         var response = await _http.SendAsync(request);
         var responseBody = await response.Content.ReadAsStringAsync();
 
@@ -265,12 +282,16 @@ public class AppleProvisionService
             throw new AppleAuthException($"创建证书失败: {response.StatusCode} - {Truncate(responseBody, 200)}");
 
         var data = JsonSerializer.Deserialize<JsonElement>(responseBody);
-        // 尝试从响应中解析
         var certId = data.TryGetProperty("resultId", out var rid) ? rid.GetString() ?? "" : "";
         if (string.IsNullOrEmpty(certId))
             certId = data.TryGetProperty("certificateId", out var cid) ? cid.GetString() ?? "" : "";
         if (string.IsNullOrEmpty(certId))
             certId = data.TryGetProperty("certId", out var certIdVal) ? certIdVal.GetString() ?? "" : "";
+        if (string.IsNullOrEmpty(certId) && data.TryGetProperty("certificate", out var certObj))
+        {
+            certId = certObj.TryGetProperty("certificateId", out var cid2) ? cid2.GetString() ?? "" :
+                     certObj.TryGetProperty("serialNumber", out var sn) ? sn.GetString() ?? "" : "";
+        }
 
         if (string.IsNullOrEmpty(certId))
             throw new AppleAuthException($"创建证书成功但无法解析证书 ID: {Truncate(responseBody, 500)}");
@@ -281,7 +302,7 @@ public class AppleProvisionService
     private async Task<byte[]> DownloadCertificateAsync(string certificateId)
     {
         var request = new HttpRequestMessage(HttpMethod.Get,
-            $"https://developer.apple.com/account/resources/certificates/download?id={certificateId}&teamId={_adsId}");
+            $"{PORTAL_BASE_URL}/resources/downloadCertificate?id={certificateId}&teamId={_adsId}");
         AddPortalHeaders(request);
         var response = await _http.SendAsync(request);
 
@@ -295,18 +316,17 @@ public class AppleProvisionService
         List<string> certificateIds, List<string> deviceIds)
     {
         var request = new HttpRequestMessage(HttpMethod.Post,
-            $"https://developer.apple.com/account/resources/profiles/add?teamId={_adsId}");
+            $"{PORTAL_BASE_URL}/resources/generateDevelopmentProvisioningProfile");
         AddPortalHeaders(request);
-        var body = JsonSerializer.Serialize(new
+        var form = new Dictionary<string, string>
         {
-            name,
-            bundleId,
-            certificateIds,
-            deviceIds,
-            subAccountId = _adsId,
-            type = "IOS_APP_DEVELOPMENT"
-        });
-        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+            ["teamId"] = _adsId ?? "",
+            ["profileName"] = name,
+            ["appIdId"] = bundleId,
+            ["certificateId"] = certificateIds.FirstOrDefault() ?? "",
+            ["deviceIds"] = string.Join(",", deviceIds)
+        };
+        request.Content = new FormUrlEncodedContent(form);
         var response = await _http.SendAsync(request);
         var responseBody = await response.Content.ReadAsStringAsync();
 
@@ -326,7 +346,7 @@ public class AppleProvisionService
     private async Task<byte[]> DownloadProfileAsync(string profileId)
     {
         var request = new HttpRequestMessage(HttpMethod.Get,
-            $"https://developer.apple.com/account/resources/profiles/download?id={profileId}&teamId={_adsId}");
+            $"{PORTAL_BASE_URL}/resources/downloadProfile?id={profileId}&teamId={_adsId}");
         AddPortalHeaders(request);
         var response = await _http.SendAsync(request);
 

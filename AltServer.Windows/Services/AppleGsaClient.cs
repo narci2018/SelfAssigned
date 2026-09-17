@@ -75,6 +75,7 @@ public class AppleGsaClient : IDisposable
         _dataDir = dataDir;
         _anisetteUrl = anisetteUrl?.Trim() ?? string.Empty;
 
+        // 必须在 HttpClient 创建前设置 TLS 协议
         ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;
 
         var handler = new HttpClientHandler

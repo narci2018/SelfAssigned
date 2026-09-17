@@ -461,10 +461,15 @@ public class AppleGsaClient : IDisposable
             var encryptedToken = et[15..^16];
             var tag = et[^16..];
 
+            LogService.Info($"[GSA] apptokens associatedData: {BitConverter.ToString(associatedData)}");
+            LogService.Info($"[GSA] apptokens iv length: {iv.Length}");
+            LogService.Info($"[GSA] apptokens encryptedToken length: {encryptedToken.Length}");
+            LogService.Info($"[GSA] apptokens tag length: {tag.Length}");
+
             var plain = AesGcmDecrypt(_sessionKey, iv, encryptedToken, tag, associatedData);
             if (plain == null)
             {
-                LogService.Error("[GSA] apptokens AES-GCM 解密失败");
+                LogService.Error($"[GSA] apptokens AES-GCM 解密失败 - keyLen={_sessionKey.Length}, ivLen={iv.Length}, ctLen={encryptedToken.Length}, tagLen={tag.Length}");
                 return null;
             }
 
@@ -490,13 +495,31 @@ public class AppleGsaClient : IDisposable
     {
         try
         {
+            if (key.Length != 16 && key.Length != 24 && key.Length != 32)
+            {
+                LogService.Error($"[GSA] AesGcmDecrypt: invalid key length {key.Length}");
+                return null;
+            }
+            if (iv.Length != 12)
+            {
+                LogService.Error($"[GSA] AesGcmDecrypt: invalid iv length {iv.Length}");
+                return null;
+            }
+            if (tag.Length != 16)
+            {
+                LogService.Error($"[GSA] AesGcmDecrypt: invalid tag length {tag.Length}");
+                return null;
+            }
+
             using var aes = new AesGcm(key, tag.Length);
             var plain = new byte[ciphertext.Length];
             aes.Decrypt(iv, ciphertext, tag, plain, aad);
+            LogService.Info($"[GSA] apptokens AES-GCM 解密成功，明文长度: {plain.Length}");
             return plain;
         }
-        catch
+        catch (Exception ex)
         {
+            LogService.Error($"[GSA] AesGcmDecrypt 异常: {ex.GetType().Name}: {ex.Message}");
             return null;
         }
     }

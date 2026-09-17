@@ -243,15 +243,63 @@ public class AppleGsaClient : IDisposable
         }
     }
 
-    /// <summary>After Requires2FA + user enters the code, call this to retry/complete.</summary>
-    public Task<AuthResult> Submit2FACodeAsync(string code)
+    /// <summary>After Requires2FA + user enters the code, call this to complete auth.</summary>
+    public async Task<AuthResult> Submit2FACodeAsync(string code)
     {
-        // GSA-native secondary auth is not available on current servers;
-        // the caller should complete 2FA via the idmsa/trusted-device flow,
-        // then re-run AuthenticateAsync. Keep this as a stub returning Error
-        // so the UI surfaces a clear message instead of silently failing.
-        LogService.Info($"[GSA] Submit2FACodeAsync(code) - GSA 原生 2FA 不可用，请改用 idmsa 流程");
-        return Task.FromResult(AuthResult.Error("GSA 原生 2FA 不可用。请在设备上完成双重认证后重试。"));
+        if (string.IsNullOrEmpty(_gsIdmsToken) || string.IsNullOrEmpty(_adsId))
+            return AuthResult.Error("会话已过期，请重新输入 Apple ID 和密码");
+
+        try
+        {
+            LogService.Info("[GSA] 提交 2FA 验证码到 GSA validate 端点...");
+
+            var anisette = await GetAnisetteAsync();
+            if (anisette == null)
+                return AuthResult.Error("无法获取 Anisette 数据");
+
+            var identityToken = Convert.ToBase64String(
+                Encoding.UTF8.GetBytes($"{_adsId}:{_gsIdmsToken}"));
+
+            var request = new HttpRequestMessage(HttpMethod.Get,
+                "https://gsa.apple.com/grandslam/GsService2/validate");
+            request.Headers.Add("User-Agent", GS_USER_AGENT);
+            request.Headers.Add("Accept", "*/*");
+            request.Headers.Add("X-Apple-Identity-Token", identityToken);
+            request.Headers.Add("security-code", code);
+
+            foreach (var kvp in anisette.ToHeaders())
+                request.Headers.TryAddWithoutValidation(kvp.Key, kvp.Value);
+
+            var response = await _http.SendAsync(request);
+            var responseBody = await response.Content.ReadAsStringAsync();
+
+            LogService.Info($"[GSA] 2FA validate 响应: {response.StatusCode}, body={responseBody.Length}B");
+
+            if (response.IsSuccessStatusCode)
+            {
+                var result = ParseApplePlist(responseBody);
+                if (result != null)
+                {
+                    var hsc = GetInt(result, "hsc", 0);
+                    if (hsc == 200)
+                    {
+                        LogService.Info("[GSA] 2FA 验证成功");
+                        IsAuthenticated = true;
+                        return AuthResult.Success;
+                    }
+                    return AuthResult.Error($"2FA 验证失败: hsc={hsc}");
+                }
+                return AuthResult.Success;
+            }
+
+            LogService.Error($"[GSA] 2FA validate 失败: {response.StatusCode} - {Truncate(responseBody, 200)}");
+            return AuthResult.Error($"2FA 验证失败: {response.StatusCode}");
+        }
+        catch (Exception ex)
+        {
+            LogService.Error($"[GSA] 2FA 提交异常: {ex.Message}");
+            return AuthResult.Error(ex.Message);
+        }
     }
 
     private void SaveSession(Dictionary<string, string> completeResult, byte[] salt, string password,

@@ -1,44 +1,63 @@
 using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Text.Json;
 
 namespace AltServer.Windows.Services;
 
 /// <summary>
-/// Apple 证书自动配置服务：
-/// 输入 Apple ID + 密码 → 自动登录 → 创建证书 → 创建配置文件 → 保存本地
+/// Apple 证书自动配置服务。
+/// 走 GSA/SRP 认证（与 SideStore/icloud-auth 相同流程），拿到 GsIdmsToken + adsid
+/// 后直接调用 Apple Developer Portal REST API。
 /// </summary>
 public class AppleProvisionService
 {
     private readonly string _dataDir;
-    private readonly ApplePortalClient _portal;
+    private readonly AppleGsaClient _gsa;
+    private readonly HttpClient _http;
+    private string? _adsId;
+    private string? _gsIdmsToken;
 
     public event Action<string>? Progress;
 
-    public AppleProvisionService(string dataDir)
+    public AppleProvisionService(string toolsDir, string dataDir, string? anisetteUrl = null)
     {
         _dataDir = dataDir;
-        _portal = new ApplePortalClient();
+        _gsa = new AppleGsaClient(toolsDir, dataDir, anisetteUrl);
+        ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;
+        _http = new HttpClient(new HttpClientHandler
+        {
+            AutomaticDecompression = DecompressionMethods.All,
+            AllowAutoRedirect = true
+        })
+        {
+            Timeout = TimeSpan.FromSeconds(30)
+        };
         Directory.CreateDirectory(Path.Combine(_dataDir, "certs"));
         Directory.CreateDirectory(Path.Combine(_dataDir, "profiles"));
     }
 
-    // MARK: - 认证
+    // MARK: - 认证（GSA/SRP 流程）
 
     public async Task<AuthResult> SignInAsync(string appleId, string password)
     {
-        return await _portal.SignInAsync(appleId, password);
+        return await _gsa.AuthenticateAsync(appleId, password);
     }
 
     public async Task<AuthResult> Submit2FACodeAsync(string code)
     {
-        return await _portal.Submit2FACodeAsync(code);
+        return await _gsa.Submit2FACodeAsync(code);
     }
 
-    public async Task RequestSMSCodeAsync(string? phoneNumberId = null)
+    private string BuildIdentityToken()
     {
-        await _portal.RequestSMSCodeAsync(phoneNumberId);
+        if (string.IsNullOrEmpty(_adsId) || string.IsNullOrEmpty(_gsIdmsToken))
+            return string.Empty;
+        return Convert.ToBase64String(Encoding.UTF8.GetBytes($"{_adsId}:{_gsIdmsToken}"));
     }
 
     // MARK: - 一键配置
@@ -55,20 +74,21 @@ public class AppleProvisionService
         {
             // 1. 获取团队
             Progress?.Invoke("获取开发者团队信息...");
-            var teams = await _portal.GetTeamsAsync();
+            var teams = await GetTeamsAsync();
             if (teams.Count == 0)
                 throw new InvalidOperationException("未找到开发者团队，请确认 Apple ID 已加入开发者计划");
 
             result.TeamName = teams[0].TeamName;
+            result.TeamId = teams[0].TeamId;
 
             // 2. 注册设备
             Progress?.Invoke($"注册设备 {deviceName}...");
             try
             {
-                await _portal.RegisterDeviceAsync(deviceName, deviceUdid);
+                await RegisterDeviceAsync(deviceName, deviceUdid);
                 result.DeviceRegistered = true;
             }
-            catch (AppleAuthException ex) when (ex.Message.Contains("already") || ex.Message.Contains("exists"))
+            catch (Exception ex) when (ex.Message.Contains("already") || ex.Message.Contains("exists"))
             {
                 result.DeviceRegistered = true;
             }
@@ -77,10 +97,10 @@ public class AppleProvisionService
             Progress?.Invoke($"注册 App ID: {bundleId}...");
             try
             {
-                await _portal.RegisterBundleIdAsync(bundleId, appName);
+                await RegisterBundleIdAsync(bundleId, appName);
                 result.BundleIdRegistered = true;
             }
-            catch (AppleAuthException ex) when (ex.Message.Contains("already") || ex.Message.Contains("exists"))
+            catch (Exception ex) when (ex.Message.Contains("already") || ex.Message.Contains("exists"))
             {
                 result.BundleIdRegistered = true;
             }
@@ -88,28 +108,27 @@ public class AppleProvisionService
             // 4. 生成 CSR 并创建证书
             Progress?.Invoke("创建代码签名证书...");
             var (csrContent, privateKeyPem) = GenerateCSR();
-            var cert = await _portal.CreateCertificateAsync(csrContent, "IOS_DEVELOPMENT");
+            var cert = await CreateCertificateAsync(csrContent);
             result.CertificateId = cert.Id;
 
             // 5. 下载证书
             Progress?.Invoke("下载证书...");
-            var certBytes = await _portal.DownloadCertificateAsync(cert.Id);
+            var certBytes = await DownloadCertificateAsync(cert.Id);
             var p12Path = await SaveCertificateAsync(certBytes, privateKeyPem, bundleId);
             result.P12Path = p12Path;
 
             // 6. 创建 provisioning profile
             Progress?.Invoke("创建 Provisioning Profile...");
-            var profile = await _portal.CreateProfileAsync(
+            var profile = await CreateProfileAsync(
                 $"{appName} Development",
                 bundleId,
                 new List<string> { cert.Id },
-                new List<string>(), // 设备ID后续填充
-                "IOS_APP_DEVELOPMENT");
+                new List<string>());
             result.ProfileId = profile.Id;
 
             // 7. 下载 profile
             Progress?.Invoke("下载配置文件...");
-            var profileBytes = await _portal.DownloadProfileAsync(profile.Id);
+            var profileBytes = await DownloadProfileAsync(profile.Id);
             var mpPath = SaveProfile(profileBytes, bundleId);
             result.ProvisionPath = mpPath;
 
@@ -120,9 +139,173 @@ public class AppleProvisionService
         {
             result.Success = false;
             result.ErrorMessage = ex.Message;
+            LogService.Error($"[Provision] 自动配置失败: {ex.Message}");
             return result;
         }
     }
+
+    // MARK: - 开发者门户 API（使用 GsIdmsToken 认证）
+
+    private async Task<List<DeveloperTeam>> GetTeamsAsync()
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get,
+            "https://developer.apple.com/services/QH65B2/idmsa/webauth/getTeams");
+        AddPortalHeaders(request);
+        var response = await _http.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        if (!response.IsSuccessStatusCode)
+            throw new AppleAuthException($"获取团队列表失败: {response.StatusCode} - {Truncate(body, 200)}");
+
+        var data = JsonSerializer.Deserialize<JsonElement>(body);
+        var teams = new List<DeveloperTeam>();
+
+        if (data.TryGetProperty("teams", out var teamsArray))
+        {
+            foreach (var team in teamsArray.EnumerateArray())
+            {
+                teams.Add(new DeveloperTeam
+                {
+                    TeamId = team.GetProperty("teamId").GetString() ?? "",
+                    TeamName = team.TryGetProperty("teamName", out var name) ? name.GetString() ?? "" : ""
+                });
+            }
+        }
+
+        if (teams.Count > 0)
+        {
+            _adsId = teams[0].TeamId;
+        }
+
+        return teams;
+    }
+
+    private async Task RegisterDeviceAsync(string name, string udid)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post,
+            $"https://developer.apple.com/account/resources/devices/add?teamId={_adsId}");
+        AddPortalHeaders(request);
+        var body = JsonSerializer.Serialize(new { name, udid, platform = "IOS" });
+        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        var response = await _http.SendAsync(request);
+        var responseBody = await response.Content.ReadAsStringAsync();
+
+        if (!response.IsSuccessStatusCode)
+            throw new AppleAuthException($"注册设备失败: {response.StatusCode} - {Truncate(responseBody, 200)}");
+    }
+
+    private async Task RegisterBundleIdAsync(string bundleIdentifier, string name)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post,
+            $"https://developer.apple.com/account/resources/identifiers/add?teamId={_adsId}");
+        AddPortalHeaders(request);
+        var body = JsonSerializer.Serialize(new { identifier = bundleIdentifier, name, type = "app", platform = "ios" });
+        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        var response = await _http.SendAsync(request);
+        var responseBody = await response.Content.ReadAsStringAsync();
+
+        if (!response.IsSuccessStatusCode)
+            throw new AppleAuthException($"注册 Bundle ID 失败: {response.StatusCode} - {Truncate(responseBody, 200)}");
+    }
+
+    private async Task<PortalCertificate> CreateCertificateAsync(string csrContent)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post,
+            $"https://developer.apple.com/account/resources/certificates/add?teamId={_adsId}");
+        AddPortalHeaders(request);
+        var body = JsonSerializer.Serialize(new { csrContent, certificateType = "IOS_DEVELOPMENT" });
+        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        var response = await _http.SendAsync(request);
+        var responseBody = await response.Content.ReadAsStringAsync();
+
+        if (!response.IsSuccessStatusCode)
+            throw new AppleAuthException($"创建证书失败: {response.StatusCode} - {Truncate(responseBody, 200)}");
+
+        var data = JsonSerializer.Deserialize<JsonElement>(responseBody);
+        // 尝试从响应中解析
+        var certId = data.TryGetProperty("resultId", out var rid) ? rid.GetString() ?? "" : "";
+        if (string.IsNullOrEmpty(certId))
+            certId = data.TryGetProperty("certificateId", out var cid) ? cid.GetString() ?? "" : "";
+        if (string.IsNullOrEmpty(certId))
+            certId = data.TryGetProperty("certId", out var certIdVal) ? certIdVal.GetString() ?? "" : "";
+
+        if (string.IsNullOrEmpty(certId))
+            throw new AppleAuthException($"创建证书成功但无法解析证书 ID: {Truncate(responseBody, 500)}");
+
+        return new PortalCertificate { Id = certId, Name = "iOS Development" };
+    }
+
+    private async Task<byte[]> DownloadCertificateAsync(string certificateId)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get,
+            $"https://developer.apple.com/account/resources/certificates/download?id={certificateId}&teamId={_adsId}");
+        AddPortalHeaders(request);
+        var response = await _http.SendAsync(request);
+
+        if (!response.IsSuccessStatusCode)
+            throw new AppleAuthException($"下载证书失败: {response.StatusCode}");
+
+        return await response.Content.ReadAsByteArrayAsync();
+    }
+
+    private async Task<PortalProfile> CreateProfileAsync(string name, string bundleId,
+        List<string> certificateIds, List<string> deviceIds)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post,
+            $"https://developer.apple.com/account/resources/profiles/add?teamId={_adsId}");
+        AddPortalHeaders(request);
+        var body = JsonSerializer.Serialize(new
+        {
+            name,
+            bundleId,
+            certificateIds,
+            deviceIds,
+            subAccountId = _adsId,
+            type = "IOS_APP_DEVELOPMENT"
+        });
+        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        var response = await _http.SendAsync(request);
+        var responseBody = await response.Content.ReadAsStringAsync();
+
+        if (!response.IsSuccessStatusCode)
+            throw new AppleAuthException($"创建配置文件失败: {response.StatusCode} - {Truncate(responseBody, 200)}");
+
+        var data = JsonSerializer.Deserialize<JsonElement>(responseBody);
+        var profileId = data.TryGetProperty("resultId", out var rid) ? rid.GetString() ?? "" : "";
+        if (string.IsNullOrEmpty(profileId))
+            profileId = data.TryGetProperty("profileId", out var pid) ? pid.GetString() ?? "" : "";
+        if (string.IsNullOrEmpty(profileId))
+            profileId = data.TryGetProperty("id", out var id) ? id.GetString() ?? "" : "";
+
+        return new PortalProfile { Id = profileId, Name = name };
+    }
+
+    private async Task<byte[]> DownloadProfileAsync(string profileId)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get,
+            $"https://developer.apple.com/account/resources/profiles/download?id={profileId}&teamId={_adsId}");
+        AddPortalHeaders(request);
+        var response = await _http.SendAsync(request);
+
+        if (!response.IsSuccessStatusCode)
+            throw new AppleAuthException($"下载配置文件失败: {response.StatusCode}");
+
+        return await response.Content.ReadAsByteArrayAsync();
+    }
+
+    // MARK: - 内部方法
+
+    private void AddPortalHeaders(HttpRequestMessage request)
+    {
+        var identityToken = BuildIdentityToken();
+        if (!string.IsNullOrEmpty(identityToken))
+            request.Headers.Add("X-Apple-Identity-Token", identityToken);
+        request.Headers.Add("X-Requested-With", "XMLHttpRequest");
+        request.Headers.Add("User-Agent", "Xcode");
+        request.Headers.Add("Accept", "application/json");
+    }
+
+    private static string Truncate(string s, int max) => s.Length > max ? s[..max] : s;
 
     // MARK: - CSR 生成
 
@@ -134,8 +317,6 @@ public class AppleProvisionService
             rsa,
             HashAlgorithmName.SHA256,
             RSASignaturePadding.Pkcs1);
-
-        // Serial number is set automatically by the CA
 
         var csrBytes = request.CreateSigningRequest();
         var csrPem = $"-----BEGIN CERTIFICATE REQUEST-----\n" +
@@ -178,6 +359,7 @@ public class ProvisionResult
     public bool Success { get; set; }
     public string ErrorMessage { get; set; } = string.Empty;
     public string TeamName { get; set; } = string.Empty;
+    public string TeamId { get; set; } = string.Empty;
     public bool DeviceRegistered { get; set; }
     public bool BundleIdRegistered { get; set; }
     public string CertificateId { get; set; } = string.Empty;

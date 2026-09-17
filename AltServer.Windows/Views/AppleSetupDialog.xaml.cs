@@ -56,7 +56,8 @@ public partial class AppleSetupDialog : Window
 
             _appleId = appleId;
             _password = password;
-            _provisionService = new AppleProvisionService(_dataDir);
+            var settings = new SettingsService();
+            _provisionService = new AppleProvisionService(settings.ResolveToolsDir(), _dataDir, AnisetteUrlBox.Text.Trim());
         }
         else
         {

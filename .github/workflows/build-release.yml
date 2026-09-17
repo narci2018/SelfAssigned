@@ -251,6 +251,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
         with:
@@ -266,8 +269,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ github.ref_name }}"
-          echo "Creating release for $TAG"
+          echo "Creating release for $TAG in ${{ github.repository }}"
           gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
             --title "AltStore $TAG" \
             --notes "AltStore & AltServer $TAG release"
           
@@ -279,7 +283,7 @@ jobs:
             artifacts/AltStore-PAL-iOS/AltStore-PAL.ipa; do
             if [ -f "$file" ]; then
               echo "Uploading $file..."
-              gh release upload "$TAG" "$file" --clobber
+              gh release upload "$TAG" "$file" --repo "${{ github.repository }}" --clobber
             else
               echo "Warning: File $file not found, skipping."
             fi

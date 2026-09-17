@@ -101,7 +101,7 @@
                              BorderBrush="#CBD5E1" BorderThickness="1" Background="White"
                              Margin="0,0,0,10"
                              HorizontalContentAlignment="Center" />
-                    <TextBlock x:Name="TwoFaHint" Text="请在 iPhone/可信设备上点击&quot;允许&quot;后，输入收到的 6 位验证码"
+                    <TextBlock x:Name="TwoFaHint" Text="请在 iPhone/可信设备上点击允许后，输入收到的 6 位验证码"
                                FontSize="11" Foreground="#94A3B8" Margin="0,0,0,10"
                                TextWrapping="Wrap" />
                 </StackPanel>

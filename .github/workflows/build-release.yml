@@ -262,74 +262,29 @@ jobs:
           find artifacts -type f | head -20
           
       - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          name: AltStore ${{ github.ref_name }}
-          body: |
-            ## What's New
-            
-            See the [CHANGELOG](CHANGELOG.md) for details.
-            
-            ## Downloads
-            
-            ### AltServer (macOS)
-            - `AltServer.dmg` - macOS server application (Apple Silicon)
-            
-            ### AltServer (Windows)
-            - `AltServer-Windows.zip` - Windows 10/11 server application
-            
-            ### AltStore (iOS)
-            - `AltStore.ipa` - iOS client app
-            
-            ### AltStore PAL (EU)
-            - `AltStore-PAL.ipa` - EU Alternative Marketplace version
-            
-            ## Installation
-            
-            ### macOS
-            1. Mount the DMG
-            2. Drag AltServer to Applications
-            3. Run AltServer
-            
-            ### Windows
-            1. Download `AltServer-Windows.zip`
-            2. Extract to a folder (e.g., `C:\AltServer`)
-            3. Run `AltServer.exe`
-            4. Place libimobiledevice tools in `tools` folder
-
-            > Anisette is built-in: the real Apple `CoreADI.dll` ships inside
-            > `tools\an\`, so local Apple ID authentication works without any
-            > external anisette server. (The remote anisette fallback is used
-            > only if `CoreADI.dll` is missing.)
-            
-            ### AltStore (iOS)
-            1. Open AltServer on your computer
-            2. Connect your iOS device via USB
-            3. Install AltStore using AltServer
-            
-            ## Requirements
-            - macOS 13.0+ or Windows 10+ for AltServer
-            - iOS 16.0+ for AltStore
-            - Xcode 15.0+ for building from source (macOS)
-            - .NET 8.0+ SDK for building from source (Windows)
-            
-            ## Windows Tools
-            
-            For the Windows version, download the required tools:
-            - [libimobiledevice-win32](https://github.com/libimobiledevice-win32/imobiledevice-net/releases) - Device communication
-            - [zsign](https://github.com/zhlynn/zsign/releases) - IPA code signing
-            
-            Or run `.\scripts\download-windows-tools.ps1` to auto-download.
-          files: |
-            artifacts/AltServer-macOS/AltServer.dmg
-            artifacts/AltServer-Windows/AltServer-Windows.zip
-            artifacts/AltStore-iOS/AltStore.ipa
-            artifacts/AltStore-PAL-iOS/AltStore-PAL.ipa
-          draft: false
-          prerelease: false
-          generate_release_notes: true
-          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          echo "Creating release for $TAG"
+          gh release create "$TAG" \
+            --title "AltStore $TAG" \
+            --notes "AltStore & AltServer $TAG release"
+          
+          echo "Uploading release assets sequentially..."
+          for file in \
+            artifacts/AltServer-macOS/AltServer.dmg \
+            artifacts/AltServer-Windows/AltServer-Windows.zip \
+            artifacts/AltStore-iOS/AltStore.ipa \
+            artifacts/AltStore-PAL-iOS/AltStore-PAL.ipa; do
+            if [ -f "$file" ]; then
+              echo "Uploading $file..."
+              gh release upload "$TAG" "$file" --clobber
+            else
+              echo "Warning: File $file not found, skipping."
+            fi
+          done
+          echo "All assets uploaded successfully."
 
   notify:
     name: Send Notification

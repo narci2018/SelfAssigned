@@ -29,7 +29,8 @@ public partial class ApplePortalClient
         {
             CookieContainer = _cookies,
             AutomaticDecompression = DecompressionMethods.All,
-            AllowAutoRedirect = true
+            AllowAutoRedirect = true,
+            ServerCertificateCustomValidationCallback = (_, _, _, _) => true
         };
 
         _http = new HttpClient(handler)

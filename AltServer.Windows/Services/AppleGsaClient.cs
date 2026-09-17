@@ -453,26 +453,30 @@ public class AppleGsaClient : IDisposable
             }
 
             var et = GetData(result, "et");
-            LogService.Info($"[GSA] apptokens et length: {et?.Length ?? 0}, sessionKey length: {_sessionKey.Length}");
-            LogService.Info($"[GSA] apptokens et hex: {(et != null ? BitConverter.ToString(et[..Math.Min(32, et.Length)]) : "null")}");
-            LogService.Info($"[GSA] apptokens sessionKey hex: {BitConverter.ToString(_sessionKey[..Math.Min(32, _sessionKey.Length)])}");
-            if (et == null || et.Length < 19)
+            LogService.Info($"[GSA] apptokens et length: {et?.Length ?? 0}");
+            LogService.Info($"[GSA] apptokens et hex (first 64): {(et != null ? BitConverter.ToString(et[..Math.Min(64, et.Length)]) : "null")}");
+            if (et == null || et.Length < 31)
             {
-                LogService.Warning($"[GSA] apptokens 无 et: hsc={GetInt(result, "hsc", 0)} ec={GetInt(result, "ec", -1)} em={GetString(result, "em", "")}");
+                LogService.Warning($"[GSA] apptokens 无 et 或太短: hsc={GetInt(result, "hsc", 0)} ec={GetInt(result, "ec", -1)} em={GetString(result, "em", "")}");
                 return null;
             }
 
-            var associatedData = et[..3];   // "XYZ"
+            // Apple et format: [3-byte magic][12-byte IV][encrypted_token][16-byte GCM tag]
+            // Total = 3 + 12 + N + 16 = N + 31
+            var magic = et[..3];  // "XYZ" or similar
             var iv = et[3..15];
-            var encryptedToken = et[15..^16];
-            var tag = et[^16..];
+            var ciphertextWithAuthTag = et[15..];  // Last 16 bytes are the GCM tag
 
-            LogService.Info($"[GSA] apptokens associatedData: {BitConverter.ToString(associatedData)}");
-            LogService.Info($"[GSA] apptokens iv length: {iv.Length}");
-            LogService.Info($"[GSA] apptokens encryptedToken length: {encryptedToken.Length}");
-            LogService.Info($"[GSA] apptokens tag length: {tag.Length}");
+            // Split ciphertext and auth tag
+            var ciphertext = ciphertextWithAuthTag[..^16];
+            var authTag = ciphertextWithAuthTag[^16..];
 
-            var plain = AesGcmDecrypt(_sessionKey, iv, encryptedToken, tag, associatedData);
+            LogService.Info($"[GSA] apptokens magic: {BitConverter.ToString(magic)}");
+            LogService.Info($"[GSA] apptokens iv length: {iv.Length}, ciphertext length: {ciphertext.Length}, tag length: {authTag.Length}");
+            LogService.Info($"[GSA] apptokens iv hex: {BitConverter.ToString(iv)}");
+            LogService.Info($"[GSA] apptokens authTag hex: {BitConverter.ToString(authTag)}");
+
+            var plain = AesGcmDecrypt(_sessionKey, iv, ciphertext, authTag, magic);
             if (plain == null)
             {
                 LogService.Error($"[GSA] apptokens AES-GCM 解密失败 - keyLen={_sessionKey.Length}, ivLen={iv.Length}, ctLen={encryptedToken.Length}, tagLen={tag.Length}");

@@ -1,7 +1,7 @@
 <Window x:Class="AltServer.Windows.Views.AppleSetupDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Apple ID 配置" Height="580" Width="460"
+        Title="Apple ID Setup" Height="580" Width="460"
         WindowStartupLocation="CenterOwner"
         Background="#F8FAFC" ResizeMode="NoResize">
 
@@ -64,16 +64,16 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- 标题 -->
+        <!-- Title -->
         <StackPanel Grid.Row="0" Margin="0,0,0,20">
-            <TextBlock Text="🍎 Apple ID 配置" FontSize="22" FontWeight="Bold" Foreground="#1E293B" />
-            <TextBlock Text="登录后需手动提供证书和配置文件" FontSize="13"
+            <TextBlock Text="Apple ID Setup" FontSize="22" FontWeight="Bold" Foreground="#1E293B" />
+            <TextBlock Text="After login you need to provide certificate and provisioning profile" FontSize="13"
                        Foreground="#64748B" Margin="0,4,0,0" />
         </StackPanel>
 
-        <!-- 表单 -->
+        <!-- Form -->
         <StackPanel Grid.Row="1">
-            <!-- 认证状态 -->
+            <!-- Auth status -->
             <Border x:Name="AuthStatusBorder" Background="#F0F9FF" BorderBrush="#BAE6FD" BorderThickness="1"
                     CornerRadius="6" Padding="12,10" Margin="0,0,0,14" Visibility="Collapsed">
                 <StackPanel>
@@ -82,42 +82,42 @@
                 </StackPanel>
             </Border>
 
-            <!-- Apple ID + 密码 -->
+            <!-- Apple ID + Password -->
             <StackPanel x:Name="LoginPanel">
-                <TextBlock Text="Apple ID (邮箱)" FontSize="13" Margin="0,0,0,6" />
+                <TextBlock Text="Apple ID (Email)" FontSize="13" Margin="0,0,0,6" />
                 <TextBox x:Name="AppleIdBox" FontSize="14" Padding="10,8"
                          BorderBrush="#CBD5E1" BorderThickness="1" Background="White"
                          Margin="0,0,0,14" />
 
-                <TextBlock Text="密码" FontSize="13" Margin="0,0,0,6" />
+                <TextBlock Text="Password" FontSize="13" Margin="0,0,0,6" />
                 <PasswordBox x:Name="PasswordBox" FontSize="14" Padding="10,8"
                              BorderBrush="#CBD5E1" BorderThickness="1" Background="White"
                              Margin="0,0,0,14" />
 
                 <!-- 2FA -->
                 <StackPanel x:Name="TwoFaPanel" Visibility="Collapsed">
-                    <TextBlock Text="双重认证码" FontSize="13" Margin="0,0,0,6" />
+                    <TextBlock Text="2FA Code" FontSize="13" Margin="0,0,0,6" />
                     <TextBox x:Name="TwoFaCodeBox" FontSize="14" Padding="10,8"
                              BorderBrush="#CBD5E1" BorderThickness="1" Background="White"
                              Margin="0,0,0,10"
                              HorizontalContentAlignment="Center" />
-                    <TextBlock x:Name="TwoFaHint" Text="请在 iPhone/可信设备上点击允许后，输入收到的 6 位验证码"
+                    <TextBlock x:Name="TwoFaHint" Text="Enter the 6-digit verification code received on your trusted device"
                                FontSize="11" Foreground="#94A3B8" Margin="0,0,0,10"
                                TextWrapping="Wrap" />
                 </StackPanel>
 
                 <!-- Anisette -->
-                <TextBlock Text="Anisette 服务器 (可选)" FontSize="13" Margin="0,0,0,6" />
+                <TextBlock Text="Anisette Server (optional)" FontSize="13" Margin="0,0,0,6" />
                 <TextBox x:Name="AnisetteUrlBox" FontSize="13" Padding="10,8"
                          BorderBrush="#CBD5E1" BorderThickness="1" Background="White"
                          Margin="0,0,0,4" />
-                <TextBlock Text="留空使用内置服务器；填写自建地址如 http://192.168.1.20:6969"
+                <TextBlock Text="Leave empty to use built-in server; enter custom address like http://192.168.1.20:6969"
                            FontSize="11" Foreground="#94A3B8" Margin="0,0,0,10" TextWrapping="Wrap" />
             </StackPanel>
 
-            <!-- 证书文件选择 -->
+            <!-- Certificate file selection -->
             <StackPanel x:Name="CertPanel" Visibility="Collapsed">
-                <TextBlock Text="📜 证书文件 (.p12)" FontSize="13" Margin="0,0,0,6" />
+                <TextBlock Text="Certificate File (.p12)" FontSize="13" Margin="0,0,0,6" />
                 <Grid Margin="0,0,0,12">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
@@ -126,11 +126,11 @@
                     <TextBox x:Name="P12PathBox" FontSize="12" Padding="8,6"
                              BorderBrush="#CBD5E1" BorderThickness="1" Background="#F8FAFC"
                              IsReadOnly="True" />
-                    <Button Grid.Column="1" Content="选择..." Padding="10,6" Margin="4,0,0,0"
+                    <Button Grid.Column="1" Content="Browse..." Padding="10,6" Margin="4,0,0,0"
                             Style="{StaticResource BtnSecondary}" Click="OnBrowseP12" />
                 </Grid>
 
-                <TextBlock Text="📋 配置文件 (.mobileprovision)" FontSize="13" Margin="0,0,0,6" />
+                <TextBlock Text="Provisioning Profile (.mobileprovision)" FontSize="13" Margin="0,0,0,6" />
                 <Grid Margin="0,0,0,4">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
@@ -139,16 +139,16 @@
                     <TextBox x:Name="ProvisionPathBox" FontSize="12" Padding="8,6"
                              BorderBrush="#CBD5E1" BorderThickness="1" Background="#F8FAFC"
                              IsReadOnly="True" />
-                    <Button Grid.Column="1" Content="选择..." Padding="10,6" Margin="4,0,0,0"
+                    <Button Grid.Column="1" Content="Browse..." Padding="10,6" Margin="4,0,0,0"
                             Style="{StaticResource BtnSecondary}" Click="OnBrowseProvision" />
                 </Grid>
 
-                <TextBlock Text="提示：可在 macOS Keychain Access 中导出 .p12，或在开发者门户下载 .mobileprovision"
+                <TextBlock Text="Tip: Export .p12 from macOS Keychain Access, or download .mobileprovision from Developer Portal"
                            FontSize="11" Foreground="#94A3B8" Margin="0,8,0,0" TextWrapping="Wrap" />
             </StackPanel>
         </StackPanel>
 
-        <!-- 底部 -->
+        <!-- Bottom -->
         <StackPanel Grid.Row="2" Margin="0,20,0,0">
             <TextBlock x:Name="StatusText" FontSize="12" Foreground="#64748B"
                        TextWrapping="Wrap" Margin="0,0,0,10" Visibility="Collapsed" />
@@ -157,10 +157,10 @@
                          Margin="0,0,0,10" />
 
             <DockPanel>
-                <Button Content="跳过" FontSize="13" Padding="16,8" Background="#E2E8F0"
+                <Button Content="Skip" FontSize="13" Padding="16,8" Background="#E2E8F0"
                         Foreground="#475569" BorderThickness="0" Cursor="Hand"
                         Click="OnSkip" DockPanel.Dock="Right" Margin="10,0,0,0" />
-                <Button x:Name="SubmitBtn" Content="登录" Style="{StaticResource BtnPrimary}"
+                <Button x:Name="SubmitBtn" Content="Login" Style="{StaticResource BtnPrimary}"
                         Click="OnSubmit" />
             </DockPanel>
         </StackPanel>

@@ -245,8 +245,8 @@ struct FeatureRow: View {
 
 // MARK: - Constants
 
-private let altStoreVersion = "1.0.39"
-private let altStoreBuild = "8"
+private let altStoreVersion = "1.0.45"
+private let altStoreBuild = "9"
 
 // MARK: - Preview
 

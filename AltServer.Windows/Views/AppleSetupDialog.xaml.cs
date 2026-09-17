@@ -1,3 +1,4 @@
+using Microsoft.Win32;
 using System.IO;
 using System.Windows;
 using AltServer.Windows.Services;
@@ -9,7 +10,7 @@ public partial class AppleSetupDialog : Window
     private readonly string _dataDir;
     private bool _completed;
     private bool _waitingFor2FA;
-    private AppleProvisionService? _provisionService;
+    private AppleGsaClient? _gsaClient;
     private string _appleId = string.Empty;
     private string _password = string.Empty;
 
@@ -56,8 +57,9 @@ public partial class AppleSetupDialog : Window
 
             _appleId = appleId;
             _password = password;
+
             var settings = new SettingsService();
-            _provisionService = new AppleProvisionService(settings.ResolveToolsDir(), _dataDir, AnisetteUrlBox.Text.Trim());
+            _gsaClient = new AppleGsaClient(settings.ResolveToolsDir(), _dataDir, AnisetteUrlBox.Text.Trim());
         }
         else
         {
@@ -69,33 +71,37 @@ public partial class AppleSetupDialog : Window
             }
 
             _waitingFor2FA = false;
-            TwoFaLabel.Visibility = Visibility.Collapsed;
-            TwoFaCodeBox.Visibility = Visibility.Collapsed;
-            TwoFaHint.Visibility = Visibility.Collapsed;
+            TwoFaPanel.Visibility = Visibility.Collapsed;
+            SubmitBtn.IsEnabled = false;
+            ProgressBar.Visibility = Visibility.Visible;
+            ProgressBar.IsIndeterminate = true;
+            StatusText.Text = "正在验证双重认证...";
+            StatusText.Visibility = Visibility.Visible;
+            LogService.Info("[Setup] 提交 2FA 验证码");
 
             try
             {
-                SubmitBtn.IsEnabled = false;
-                ProgressBar.Visibility = Visibility.Visible;
-                ProgressBar.IsIndeterminate = true;
-                StatusText.Text = "正在验证双重认证...";
-                LogService.Info("[Setup] 提交 2FA 验证码");
-
-                var result = await _provisionService!.Submit2FACodeAsync(code);
-                LogService.Info($"[Setup] 2FA 验证结果: {result.Status}");
+                var result = await _gsaClient!.Submit2FACodeAsync(code);
+                LogService.Info($"[Setup] 2FA 结果: {result.Status}");
 
                 if (result.Status == AuthStatus.Error)
                 {
-                    ShowError(result.Message ?? "2FA 验证码不正确，请重试");
+                    ShowError(result.Message ?? "2FA 验证码错误，请重试");
                     return;
                 }
 
-                StatusText.Text = "2FA 验证成功，继续配置...";
-                LogService.Info("[Setup] 2FA 验证成功，开始自动配置");
+                StatusText.Text = "2FA 验证成功！";
+                StatusText.Foreground = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(0x16, 0xA3, 0x4A));
+                LogService.Info("[Setup] 2FA 验证成功");
+
+                await Task.Delay(800);
+                ShowCertSelection();
+                return;
             }
             catch (Exception ex)
             {
-                LogService.Error($"[Setup] 2FA 提交异常: {ex}");
+                LogService.Error($"[Setup] 2FA 异常: {ex}");
                 ShowError($"2FA 验证异常: {ex.Message}");
                 return;
             }
@@ -103,18 +109,21 @@ public partial class AppleSetupDialog : Window
             {
                 ProgressBar.Visibility = Visibility.Collapsed;
                 ProgressBar.IsIndeterminate = false;
+                SubmitBtn.IsEnabled = true;
             }
         }
 
+        // 初始登录流程
         try
         {
             SubmitBtn.IsEnabled = false;
             ProgressBar.Visibility = Visibility.Visible;
             ProgressBar.IsIndeterminate = true;
 
-            // 步骤1: 检测设备
-            StatusText.Text = "步骤 1/4: 检测设备...";
+            StatusText.Text = "正在检测设备...";
+            StatusText.Visibility = Visibility.Visible;
             LogService.Info("[Setup] 步骤1: 检测设备");
+
             var settings = new SettingsService();
             var deviceService = new DeviceService(settings.ResolveToolsDir());
             var devices = await Task.Run(() => deviceService.ListDevices());
@@ -125,104 +134,117 @@ public partial class AppleSetupDialog : Window
                 return;
             }
 
-            StatusText.Text = $"检测到设备: {devices[0].Name} ({devices[0].Udid[..8]}...)";
             LogService.Info($"[Setup] 检测到设备: {devices[0].Name}");
+            StatusText.Text = $"已检测到设备: {devices[0].Name}";
 
-            // 步骤2: 登录 Apple ID
-            StatusText.Text = "步骤 2/4: 登录 Apple ID...";
+            StatusText.Text = "正在登录 Apple ID...";
             LogService.Info("[Setup] 步骤2: 登录 Apple ID");
 
-            var authResult = await _provisionService!.SignInAsync(_appleId, _password);
+            var authResult = await _gsaClient!.AuthenticateAsync(_appleId, _password);
             LogService.Info($"[Setup] 认证结果: {authResult.Status}");
 
             if (authResult.Status == AuthStatus.Error)
             {
-                ShowError($"{authResult.Message}\n\n请检查:\n1. Apple ID 和密码是否正确\n2. 网络连接是否正常\n3. 是否需要开启 VPN");
+                ShowError($"{authResult.Message}\n\n请检查:\n1. Apple ID 和密码是否正确\n2. 网络连接是否正常");
                 return;
             }
 
             if (authResult.Status == AuthStatus.Requires2FA)
             {
-                LogService.Info("[Setup] 需要双重认证，显示 2FA 输入框");
+                LogService.Info("[Setup] 需要 2FA");
                 _waitingFor2FA = true;
-                TwoFaLabel.Visibility = Visibility.Visible;
-                TwoFaCodeBox.Visibility = Visibility.Visible;
-                TwoFaHint.Visibility = Visibility.Visible;
-                StatusText.Text = "该 Apple ID 已开启双重认证 (2FA)。\n请在 iPhone/可信设备上点击\"允许\"，然后输入收到的 6 位验证码";
-                StatusText.Foreground = new System.Windows.Media.SolidColorBrush(
-                    System.Windows.Media.Color.FromRgb(0xF5, 0x9E, 0x0B));
-                SubmitBtn.IsEnabled = true;
-                SubmitBtn.Content = "验证并配置";
-                ProgressBar.Visibility = Visibility.Collapsed;
-                ProgressBar.IsIndeterminate = false;
+                TwoFaPanel.Visibility = Visibility.Visible;
                 TwoFaCodeBox.Focus();
                 TwoFaCodeBox.SelectAll();
-                return;
-            }
-
-            if (authResult.Status == AuthStatus.RequiresNotification)
-            {
-                StatusText.Text = "请在 iPhone/可信设备上点击\"允许\"完成验证，然后点击\"继续\"";
-                LogService.Info("[Setup] 需要设备通知批准");
-                SubmitBtn.IsEnabled = true;
-                SubmitBtn.Content = "继续";
+                StatusText.Visibility = Visibility.Collapsed;
+                SubmitBtn.Content = "验证并继续";
                 ProgressBar.Visibility = Visibility.Collapsed;
                 ProgressBar.IsIndeterminate = false;
+                SubmitBtn.IsEnabled = true;
                 return;
             }
 
-            if (authResult.Status == AuthStatus.AccountLocked)
-            {
-                ShowError("该 Apple ID 已被锁定，请访问 iforgot.apple.com 解锁");
-                return;
-            }
-
-            // 步骤3: 自动创建证书和配置文件
-            StatusText.Text = "步骤 3/4: 自动配置签名...";
-            LogService.Info("[Setup] 步骤3: 自动创建证书和配置文件");
-
-            var device = devices[0];
-            var bundleId = $"com.altserver.{_appleId.Replace("@", "_").Replace(".", "_")}";
-            var appName = "AltServer App";
-
-            var provisionResult = await _provisionService.AutoProvisionAsync(
-                bundleId, appName, device.Name, device.Udid);
-
-            if (!provisionResult.Success)
-            {
-                LogService.Error($"[Setup] 自动配置失败: {provisionResult.ErrorMessage}");
-                ShowError($"自动配置失败: {provisionResult.ErrorMessage}\n\n请检查 Apple ID 权限后重试");
-                return;
-            }
-
-            ResultP12Path = provisionResult.P12Path;
-            ResultP12Password = "temp123";
-            ResultProvisionPath = provisionResult.ProvisionPath;
-
-            settings.Data.AppleId = _appleId;
-            settings.Data.P12Path = ResultP12Path!;
-            settings.Data.P12Password = ResultP12Password!;
-            settings.Data.MobileProvisionPath = ResultProvisionPath!;
-            settings.Data.SetupCompleted = true;
-            settings.Save();
-
-            // 步骤4: 完成
-            StatusText.Text = "步骤 4/4: 完成...";
-            LogService.Info("[Setup] 步骤4: 完成");
-
-            _completed = true;
-            StatusText.Text = $"✅ 配置成功!\n\n证书: {Path.GetFileName(ResultP12Path!)}\n配置文件: {Path.GetFileName(ResultProvisionPath!)}\n团队: {provisionResult.TeamName}";
-            StatusText.Foreground = new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Color.FromRgb(0x16, 0xA3, 0x4A));
-            LogService.Info("[Setup] 配置完成");
-
-            await Task.Delay(2000);
-            Close();
+            // 认证成功，显示证书选择
+            LogService.Info("[Setup] 认证成功，显示证书选择界面");
+            ShowCertSelection();
         }
         catch (Exception ex)
         {
-            LogService.Error($"[Setup] 未捕获异常: {ex}");
+            LogService.Error($"[Setup] 异常: {ex}");
             ShowError($"意外错误: {ex.Message}");
+        }
+    }
+
+    private void OnCompleteConfig(object sender, RoutedEventArgs e)
+    {
+        var p12Path = P12PathBox.Text.Trim();
+        var provPath = ProvisionPathBox.Text.Trim();
+
+        if (string.IsNullOrEmpty(p12Path) && string.IsNullOrEmpty(provPath))
+        {
+            ShowError("请至少选择一个证书文件或配置文件");
+            return;
+        }
+
+        var settings = new SettingsService();
+        settings.Data.AppleId = _appleId;
+        settings.Data.AnisetteUrl = AnisetteUrlBox.Text.Trim();
+
+        if (!string.IsNullOrEmpty(p12Path))
+        {
+            settings.Data.P12Path = p12Path;
+            ResultP12Path = p12Path;
+        }
+        if (!string.IsNullOrEmpty(provPath))
+        {
+            settings.Data.MobileProvisionPath = provPath;
+            ResultProvisionPath = provPath;
+        }
+
+        settings.Data.SetupCompleted = true;
+        settings.Save();
+
+        _completed = true;
+        LogService.Success("[Setup] 配置完成");
+        Close();
+    }
+
+    private void ShowCertSelection()
+    {
+        LoginPanel.Visibility = Visibility.Collapsed;
+        CertPanel.Visibility = Visibility.Visible;
+        SubmitBtn.Content = "完成配置";
+        StatusText.Visibility = Visibility.Collapsed;
+        SubmitBtn.IsEnabled = true;
+
+        AuthStatusBorder.Visibility = Visibility.Visible;
+        AuthStatusText.Text = "✓ Apple ID 登录成功！";
+        AuthStatusHint.Text = "请提供代码签名证书 (.p12) 和配置文件 (.mobileprovision)，或稍后在设置中配置";
+    }
+
+    private void OnBrowseP12(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog
+        {
+            Title = "选择证书文件",
+            Filter = "证书文件 (*.p12)|*.p12|所有文件 (*.*)|*.*"
+        };
+        if (dlg.ShowDialog(this) == true)
+        {
+            P12PathBox.Text = dlg.FileName;
+        }
+    }
+
+    private void OnBrowseProvision(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog
+        {
+            Title = "选择配置文件",
+            Filter = "配置文件 (*.mobileprovision)|*.mobileprovision|所有文件 (*.*)|*.*"
+        };
+        if (dlg.ShowDialog(this) == true)
+        {
+            ProvisionPathBox.Text = dlg.FileName;
         }
     }
 
@@ -231,8 +253,9 @@ public partial class AppleSetupDialog : Window
         StatusText.Text = $"❌ {message}";
         StatusText.Foreground = new System.Windows.Media.SolidColorBrush(
             System.Windows.Media.Color.FromRgb(0xDC, 0x26, 0x26));
+        StatusText.Visibility = Visibility.Visible;
         SubmitBtn.IsEnabled = true;
-        SubmitBtn.Content = _waitingFor2FA ? "验证并配置" : "自动配置";
+        SubmitBtn.Content = _waitingFor2FA ? "验证并继续" : "登录";
         ProgressBar.Visibility = Visibility.Collapsed;
         ProgressBar.IsIndeterminate = false;
     }

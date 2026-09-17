@@ -320,7 +320,7 @@ public class AppleProvisionService
     {
         var gsToken = BuildGSIdentityToken();
         if (!string.IsNullOrEmpty(gsToken))
-            request.Headers.Add("X-Apple-GS-Token", gsToken);
+            request.Headers.Add("X-Apple-Identity-Token", gsToken);
         request.Headers.Add("X-Requested-With", "XMLHttpRequest");
         request.Headers.Add("User-Agent", "Xcode");
         request.Headers.Add("Accept", "application/json");

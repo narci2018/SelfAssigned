@@ -27,8 +27,8 @@ public class AppleProvisionService
     public AppleProvisionService(string toolsDir, string dataDir, string? anisetteUrl = null)
     {
         _dataDir = dataDir;
-        _gsa = new AppleGsaClient(toolsDir, dataDir, anisetteUrl);
         ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;
+        _gsa = new AppleGsaClient(toolsDir, dataDir, anisetteUrl);
         _http = new HttpClient(new HttpClientHandler
         {
             AutomaticDecompression = DecompressionMethods.All,

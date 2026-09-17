@@ -224,6 +224,7 @@ public class AppleGsaClient : IDisposable
             _sessionCookie = ExtractData(spdText, "c") ?? Array.Empty<byte>();
 
             LogService.Info($"[GSA] spd 解密成功: adsid={_adsId}, GsIdmsToken={(_gsIdmsToken.Length > 24 ? _gsIdmsToken[..24] + "..." : _gsIdmsToken)}, sk_len={_sessionKey.Length}, c_len={_sessionCookie.Length}");
+            LogService.Info($"[GSA] spd sessionKey hex: {BitConverter.ToString(_sessionKey)}");
 
             if (string.IsNullOrEmpty(_adsId) || string.IsNullOrEmpty(_gsIdmsToken) || _sessionKey.Length == 0)
             {
@@ -420,6 +421,10 @@ public class AppleGsaClient : IDisposable
         try
         {
             var checksum = AppleSrp.MakeChecksum(_sessionKey, _adsId, app);
+            LogService.Info($"[GSA] apptokens checksum: {BitConverter.ToString(checksum)}");
+            LogService.Info($"[GSA] apptokens adsId: {_adsId}");
+            LogService.Info($"[GSA] apptokens app: {app}");
+            LogService.Info($"[GSA] apptokens gsIdmsToken: {(_gsIdmsToken.Length > 24 ? _gsIdmsToken[..24] + "..." : _gsIdmsToken)}");
             var paramsDict = new Dictionary<string, object>
             {
                 ["app"] = new object[] { app },

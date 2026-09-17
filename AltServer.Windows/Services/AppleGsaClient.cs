@@ -438,6 +438,7 @@ public class AppleGsaClient : IDisposable
             }
 
             var et = GetData(result, "et");
+            LogService.Info($"[GSA] apptokens et length: {et?.Length ?? 0}, sessionKey length: {_sessionKey.Length}");
             if (et == null || et.Length < 19)
             {
                 LogService.Warning($"[GSA] apptokens 无 et: hsc={GetInt(result, "hsc", 0)} ec={GetInt(result, "ec", -1)} em={GetString(result, "em", "")}");

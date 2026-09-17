@@ -95,6 +95,14 @@ public static class CoreADIService
         var (_, initRet) = Call(dispatch, MagicInit, Array.Empty<byte>());
         if (initRet != 0) return null;
 
+        // IsMachineProvisioned(-2): loads the machine's ADI provisioning state
+        // into memory. REQUIRED before GetIDMSRouting/RequestOTP -- without it,
+        // RequestOTP uses uninitialized provisioning and returns a MID that GSA
+        // rejects with ec=-29004 ("possible environment mismatch").
+        var imp = new byte[8];
+        PutI64(imp, 0, -2);
+        Call(dispatch, MagicIsProvisioned, imp);
+
         // GetIDMSRouting(-2): msg = [i64 ds_id][u64 raw ptr to 8-byte buffer]
         var rSlot = Marshal.AllocHGlobal(8);
         try
@@ -127,10 +135,16 @@ public static class CoreADIService
                 var ol = Marshal.ReadInt32(otpLen);
                 if (ml <= 0 || ml > 1024 || ol <= 0 || ol > 1024) return null;
 
+                // CoreADI writes a POINTER to the (internally-owned) MID/OTP
+                // data buffer into the midPtr/otpPtr slots -- it does NOT write
+                // the bytes inline. Dereference the slot to get the data
+                // pointer, then copy. Reading the slot directly yields the
+                // pointer value (a per-run heap address) as the first bytes,
+                // producing a MID that GSA rejects with ec=-29004.
                 var mid = new byte[ml];
                 var otp = new byte[ol];
-                Marshal.Copy(midPtr, mid, 0, ml);
-                Marshal.Copy(otpPtr, otp, 0, ol);
+                Marshal.Copy(Marshal.ReadIntPtr(midPtr), mid, 0, ml);
+                Marshal.Copy(Marshal.ReadIntPtr(otpPtr), otp, 0, ol);
 
                 return new AnisetteData
                 {

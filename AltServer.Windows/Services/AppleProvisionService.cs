@@ -45,12 +45,35 @@ public class AppleProvisionService
 
     public async Task<AuthResult> SignInAsync(string appleId, string password)
     {
-        return await _gsa.AuthenticateAsync(appleId, password);
+        var result = await _gsa.AuthenticateAsync(appleId, password);
+        // 认证成功后保存会话 token
+        if (result.Status == AuthStatus.Success && !result.Message.Contains("apptokens"))
+        {
+            _adsId = _gsa.AdsId ?? string.Empty;
+            _gsIdmsToken = _gsa.GsIdmsToken ?? string.Empty;
+            LogService.Info($"[Provision] 保存 GSA 会话: adsid={_adsId}, token={(_gsIdmsToken?.Length ?? 0)}B");
+        }
+        return result;
     }
 
     public async Task<AuthResult> Submit2FACodeAsync(string code)
     {
-        return await _gsa.Submit2FACodeAsync(code);
+        var result = await _gsa.Submit2FACodeAsync(code);
+        // 2FA 成功后保存新会话
+        if (result.Status == AuthStatus.Success)
+        {
+            _adsId = _gsa.AdsId ?? string.Empty;
+            _gsIdmsToken = _gsa.GsIdmsToken ?? string.Empty;
+            LogService.Info($"[Provision] 2FA 后保存 GSA 会话: adsid={_adsId}");
+        }
+        return result;
+    }
+
+    /// <summary>设置已认证的会话 token，供开发者门户 API 使用</summary>
+    public void SetSessionToken(string adsId, string gsIdmsToken)
+    {
+        _adsId = adsId;
+        _gsIdmsToken = gsIdmsToken;
     }
 
     private string BuildGSIdentityToken()

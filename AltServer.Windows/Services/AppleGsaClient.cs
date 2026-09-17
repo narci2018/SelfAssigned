@@ -49,6 +49,8 @@ public class AppleGsaClient : IDisposable
     private string _srpC = string.Empty;
 
     public bool IsAuthenticated { get; private set; }
+    public string? AdsId { get => _adsId.Length > 0 ? _adsId : null; }
+    public string? GsIdmsToken { get => _gsIdmsToken.Length > 0 ? _gsIdmsToken : null; }
     public string? TeamId { get; private set; }
     public string? AuthToken { get; private set; }
 

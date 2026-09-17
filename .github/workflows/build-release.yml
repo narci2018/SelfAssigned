@@ -117,6 +117,16 @@ jobs:
             } else { Write-Host "  anisette-server asset not found" }
           } catch { Write-Host "  anisette-server 下载失败: $_" }
 
+          Write-Host "=== 复制 CoreADI.dll (本地 anisette, 已提交) ==="
+          $coreAdiSrc = "AltServer.Windows\tools\an\CoreADI.dll"
+          if (Test-Path $coreAdiSrc) {
+            $coreAdiDst = Join-Path $toolsDir "an\CoreADI.dll"
+            New-Item -ItemType Directory -Path (Split-Path $coreAdiDst) -Force | Out-Null
+            Copy-Item $coreAdiSrc $coreAdiDst -Force
+            $sz = [math]::Round((Get-Item $coreAdiDst).Length/1MB,2)
+            Write-Host "  OK CoreADI.dll ($sz MB) -> $coreAdiDst"
+          } else { Write-Host "  MISSING committed CoreADI.dll at $coreAdiSrc" }
+
           Remove-Item "$dlDir" -Recurse -Force -EA SilentlyContinue
 
           Write-Host "=== 验证 ==="
@@ -125,6 +135,9 @@ jobs:
             if (Test-Path $p) { $s = [math]::Round((Get-Item $p).Length/1KB,1); Write-Host "  $t ($s KB)" }
             else { Write-Host "  MISSING: $t" }
           }
+          $adi = Join-Path $toolsDir "an\CoreADI.dll"
+          if (Test-Path $adi) { $s = [math]::Round((Get-Item $adi).Length/1MB,2); Write-Host "  an\CoreADI.dll ($s MB)" }
+          else { Write-Host "  MISSING: an\CoreADI.dll" }
 
       - name: Restore NuGet
         run: dotnet restore AltServer.Windows/AltServer.Windows.csproj
@@ -276,6 +289,11 @@ jobs:
             2. Extract to a folder (e.g., `C:\AltServer`)
             3. Run `AltServer.exe`
             4. Place libimobiledevice tools in `tools` folder
+
+            > Anisette is built-in: the real Apple `CoreADI.dll` ships inside
+            > `tools\an\`, so local Apple ID authentication works without any
+            > external anisette server. (The remote anisette fallback is used
+            > only if `CoreADI.dll` is missing.)
             
             ### AltStore (iOS)
             1. Open AltServer on your computer

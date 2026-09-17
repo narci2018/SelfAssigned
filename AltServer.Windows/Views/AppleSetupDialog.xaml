@@ -1,7 +1,7 @@
 <Window x:Class="AltServer.Windows.Views.AppleSetupDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Apple ID 配置" Height="380" Width="440"
+        Title="Apple ID 配置" Height="440" Width="440"
         WindowStartupLocation="CenterOwner"
         Background="#F8FAFC" ResizeMode="NoResize">
 
@@ -57,7 +57,14 @@
 
             <TextBlock Text="密码" FontSize="13" Margin="0,0,0,6" />
             <PasswordBox x:Name="PasswordBox" FontSize="14" Padding="10,8"
-                         BorderBrush="#CBD5E1" BorderThickness="1" Background="White" />
+                         BorderBrush="#CBD5E1" BorderThickness="1" Background="White"
+                         Margin="0,0,0,14" />
+
+            <TextBlock Text="Anisette 服务器 (可选)" FontSize="13" Margin="0,0,0,6" />
+            <TextBox x:Name="AnisetteUrlBox" FontSize="13" Padding="10,8"
+                     BorderBrush="#CBD5E1" BorderThickness="1" Background="White" />
+            <TextBlock Text="填写你的 iPhone/自建 anisette 地址，如 http://192.168.1.20:6969；留空使用内置服务器"
+                       FontSize="11" Foreground="#94A3B8" Margin="0,4,0,0" TextWrapping="Wrap" />
         </StackPanel>
 
         <!-- 底部 -->

@@ -29,6 +29,14 @@ public class SettingsService
         public List<Models.Source> Sources { get; set; } = new();
         public bool SetupCompleted { get; set; }
         public string? AppleId { get; set; }
+
+        /// <summary>
+        /// Anisette source base URL. Supports v3/omnisette endpoints
+        /// (POST {url}/v3/get_headers) and v1 endpoints (GET {url}).
+        /// For a phone-hosted anisette server this is e.g. http://192.168.1.20:6969.
+        /// Empty = use built-in default server list.
+        /// </summary>
+        public string AnisetteUrl { get; set; } = string.Empty;
     }
 
     public SettingsService()

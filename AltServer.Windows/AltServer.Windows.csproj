@@ -10,9 +10,9 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <RootNamespace>AltServer.Windows</RootNamespace>
     <AssemblyName>AltServer</AssemblyName>
-    <Version>1.0.23</Version>
-    <AssemblyVersion>1.0.23.0</AssemblyVersion>
-    <FileVersion>1.0.23.0</FileVersion>
+    <Version>1.0.24</Version>
+    <AssemblyVersion>1.0.24.0</AssemblyVersion>
+    <FileVersion>1.0.24.0</FileVersion>
     <Platforms>AnyCPU;x64;x86</Platforms>
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
@@ -23,5 +23,17 @@
     <PublishTrimmed>false</PublishTrimmed>
     <SatelliteResourceLanguages>zh-Hans;en</SatelliteResourceLanguages>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Apple CoreADI.dll -> {appDir}\tools\an\ (local anisette provider, preferred).
+         Copied to the build output for local dev/testing. For the published
+         single-file app it is NOT bundled here (CopyToPublishDirectory=Never);
+         instead the release workflow / download-windows-tools.ps1 place it as a
+         separate file in tools\an\ next to the exe, where CoreADIService looks. -->
+    <Content Include="tools\an\CoreADI.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
 
 </Project>

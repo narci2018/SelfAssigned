@@ -17,6 +17,12 @@ public partial class AppleSetupDialog : Window
     {
         InitializeComponent();
         _dataDir = dataDir;
+
+        try
+        {
+            AnisetteUrlBox.Text = new SettingsService().Data.AnisetteUrl;
+        }
+        catch { }
     }
 
     private void OnSkip(object sender, RoutedEventArgs e)
@@ -68,7 +74,7 @@ public partial class AppleSetupDialog : Window
             StatusText.Text = "步骤 2/4: 登录 Apple ID...";
             LogService.Info("[Setup] 步骤2: 登录 Apple ID");
 
-            var gsaClient = new AppleGsaClient(settings.ResolveToolsDir(), _dataDir);
+            var gsaClient = new AppleGsaClient(settings.ResolveToolsDir(), _dataDir, AnisetteUrlBox.Text.Trim());
             AuthResult authResult;
 
             try
@@ -92,16 +98,20 @@ public partial class AppleSetupDialog : Window
 
             if (authResult.Status == AuthStatus.Requires2FA)
             {
-                StatusText.Text = "步骤 2/4: 请在设备上确认双重认证...";
-                LogService.Info("[Setup] 等待 2FA 确认...");
-                // 简化处理：等待用户确认
-                await Task.Delay(5000);
+                StatusText.Text = "该 Apple ID 已开启双重认证 (2FA)。\n请在 iPhone/其他可信设备上点击\"允许\"完成验证，然后再次点击\"自动配置\"重试。";
+                LogService.Info("[Setup] 需要双重认证，GSA 原生 2FA 不可用，请通过 idmsa/可信设备流程完成");
+                SubmitBtn.IsEnabled = true;
+                SubmitBtn.Content = "自动配置";
+                ProgressBar.Visibility = Visibility.Collapsed;
+                ProgressBar.IsIndeterminate = false;
+                return;
             }
 
             // 步骤3: 保存配置
             StatusText.Text = "步骤 3/4: 保存配置...";
             LogService.Info("[Setup] 步骤3: 保存配置");
             settings.Data.AppleId = appleId;
+            settings.Data.AnisetteUrl = AnisetteUrlBox.Text.Trim();
             settings.Save();
 
             // 步骤4: 完成

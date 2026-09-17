@@ -49,3 +49,10 @@ __pycache__/
 .idea/
 *.iml
 .vscode/
+
+# .NET
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+project.lock.json

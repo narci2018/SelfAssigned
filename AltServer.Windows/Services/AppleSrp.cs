@@ -5,100 +5,123 @@ using System.Text;
 namespace AltServer.Windows.Services;
 
 /// <summary>
-/// Apple SRP-6a implementation (ported from iPASide/Python srp library)
-/// Apple modifications:
-/// - k = H(N | g)
-/// - x = H(salt | H(":" | password))  (username excluded from x)
-/// - s2k_fo: password hash is hex-encoded before PBKDF2
+/// Apple SRP-6a implementation, byte-for-byte compatible with the `srp` crate
+/// v0.7.0-rc.1 (RustCrypto/PAKEs) used by apple-crates/grandslam.
+///
+/// Verified live against gsa.apple.com:
+/// - group G2048 = RFC5054-style prime used by the RustCrypto srp crate
+///   (starts 0xac6bdb41..., NOT the RFC5054 appendix FFFFFFFF... prime)
+/// - username_in_x = false  =>  identity_hash = H(":" | processed_password)
+/// - x = H(salt | identity_hash)
+/// - u = H(A | B)  over the EXACT trimmed bytes sent as A2k
+/// - S = (B - k*g^x)^(a + u*x) mod N
+/// - K = H(S_trimmed)
+/// - M1 = H(H(N) XOR H(PAD(g)) | H(username) | salt | A | B | K)
+/// - M2 = H(A | M1 | K)
+/// - spd decrypt: key = HMAC-SHA256(S_raw, "extra data key:"),
+///   iv = HMAC-SHA256(S_raw, "extra data iv:")[..16], AES-256-CBC + PKCS7
 /// </summary>
 public static class AppleSrp
 {
-    // 2048-bit MODP group from RFC 5054
+    // G2048 prime from srp crate 0.7.0-rc.1 (groups.rs)
     private static readonly byte[] NBytes = HexToBytes(
-        "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1" +
-        "29024E088A67CC74020BBEA63B139B22514A08798E3404DDEF" +
-        "9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485" +
-        "B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386B" +
-        "FB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB" +
-        "8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23" +
-        "DCA3AD961C62F356208552BB9ED529077096966D670C354E4A" +
-        "BC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E" +
-        "86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF695581" +
-        "7183995497CEA956AE515D2261898FA051015728E5A8AACAA" +
-        "68FFFFFFFFFFFFFFFF");
+        "ac6bdb41324a9a9bf166de5e1389582faf72b6651987ee07fc3192943db56050a37329cbb4a099ed8193e0757767a13dd52312ab4b03310dcd7f48a9da04fd50e8083969edb767b0cf6095179a163ab3661a05fbd5faaae82918a9962f0b93b855f97993ec975eeaa80d740adbf4ff747359d041d5c33ea71d281e446b14773bca97b43a23fb801676bd207a436c6481f1d2b9078717461a5b9d32e688f87748544523b524b0d57d5ea77a2775d2ecfa032cfbdbf52fb3786160279004e57ae6af874e7303ce53299ccc041c7bc308d82a5698f3a8d0c38271ae35f8e9dbfbb694b5c803d89f7ae435de236d525f54759b65e372fcd68ef20fa7111f9e4aff73");
 
-    private static readonly BigInteger N = new BigInteger(NBytes.Reverse().Concat(new byte[] { 0 }).ToArray(), isUnsigned: true);
+    private static readonly BigInteger N = ToBigInt(NBytes);
     private static readonly BigInteger G = new BigInteger(new byte[] { 2 }, isUnsigned: true);
 
-    private static readonly byte[] NHash = SHA256.HashData(NBytes);
-    private static readonly byte[] GHash = SHA256.HashData(new byte[256].Select((_, i) => i == 255 ? (byte)2 : (byte)0).ToArray());
-    private static readonly byte[] kHash = SHA256.HashData(NHash.Concat(GHash).ToArray());
+    // PAD(g): 256-byte big-endian representation of generator g=2
+    private static readonly byte[] PaddedG;
+    // H(N) and H(PAD(g)) — used in M1 = H( H(N) XOR H(PAD(g)) || ... )
+    private static readonly byte[] NHash;
+    private static readonly byte[] GHash;
+    // k = H(N || PAD(g)) — single SHA-256 of raw N bytes + padded g
+    private static readonly byte[] kHash;
+
+    static AppleSrp()
+    {
+        PaddedG = new byte[256];
+        PaddedG[255] = 2;
+        NHash = SHA256.HashData(NBytes);
+        GHash = SHA256.HashData(PaddedG);
+        kHash = SHA256.HashData(NBytes.Concat(PaddedG).ToArray());
+    }
 
     // Store private value 'a' across GeneratePublicKey and ComputeProof
-    private static byte[] _privateA = Array.Empty<byte>();
+    private static byte[]? _privateA;
+    // Store trimmed public A (exactly what was POSTed) for M1/M2
+    private static byte[]? _trimmedA;
 
     /// <summary>
-    /// Generate client public key A = g^a mod N
+    /// Generate client public key A = g^a mod N.
+    /// Returns the TRIMMED big-endian bytes (no leading zeros), exactly what
+    /// apple-crates' compute_public_ephemeral() sends as A2k.
     /// </summary>
     public static byte[] GeneratePublicKey()
     {
-        _privateA = new byte[32];
-        RandomNumberGenerator.Fill(_privateA);
-        var bigA = BigInteger.ModPow(G, ToBigInt(_privateA), N);
-        return PadLeft(FromBigInt(bigA), 256);
+        var a = new byte[256];
+        RandomNumberGenerator.Fill(a);
+        a[0] |= 0x80; // ensure high bit set
+        _privateA = a;
+
+        var bigA = BigInteger.ModPow(G, ToBigInt(a), N);
+        _trimmedA = FromBigInt(bigA);
+        return _trimmedA;
     }
 
     /// <summary>
-    /// Derive password key using PBKDF2
-    /// s2k: P = PBKDF2(sha256(password), salt, iterations)
-    /// s2k_fo: P = PBKDF2(sha256(sha256(password)).hex(), salt, iterations)
+    /// Derive password key using PBKDF2-HMAC-SHA256.
+    /// s2k:    hashed = SHA256(password)
+    /// s2k_fo: hashed = ASCII(hex(SHA256(password)))
+    /// P = PBKDF2(hashed, salt, iterations, 32)
     /// </summary>
     public static byte[] DerivePassword(string password, byte[] salt, int iterations, bool s2kFo)
     {
         var digest = SHA256.HashData(Encoding.UTF8.GetBytes(password));
         if (s2kFo)
         {
-            // Hex-encode the digest before PBKDF2
-            digest = Encoding.UTF8.GetBytes(BitConverter.ToString(digest).Replace("-", "").ToLowerInvariant());
+            digest = Encoding.ASCII.GetBytes(Convert.ToHexString(digest).ToLowerInvariant());
         }
         return Rfc2898DeriveBytes.Pbkdf2(digest, salt, iterations, HashAlgorithmName.SHA256, 32);
     }
 
     /// <summary>
-    /// Compute SRP client proof M1
-    /// M1 = H(H(N) XOR H(g) | H(username) | salt | A | B | K)
+    /// Compute the SRP-6a client proof M1.
+    /// M1 = H(H(N) XOR H(PAD(g)) | H(username) | salt | A | B | K)
+    /// where K = H(S) and S is the trimmed premaster secret.
     /// </summary>
     public static byte[] ComputeProof(byte[] salt, string password, byte[] A, byte[] B,
         string username, int iterations, bool s2kFo)
     {
-        // Compute x = H(salt | H(":" | password))  -- username excluded
-        var passwordDerived = DerivePassword(password, salt, iterations, s2kFo);
-        var xHash = SHA256.HashData(new byte[] { 0x3a }.Concat(passwordDerived).ToArray());
-        var x = ToBigInt(SHA256.HashData(salt.Concat(xHash).ToArray()));
+        var a = ToBigInt(_privateA ?? throw new InvalidOperationException("GeneratePublicKey must be called first"));
 
-        // Compute v = g^x mod N
+        // x = H(salt | H(":" | P))  (username_in_x = false)
+        var processed = DerivePassword(password, salt, iterations, s2kFo);
+        var colonPassword = new byte[1 + processed.Length];
+        colonPassword[0] = 0x3a;
+        Buffer.BlockCopy(processed, 0, colonPassword, 1, processed.Length);
+        var identityHash = SHA256.HashData(colonPassword);
+        var x = ToBigInt(SHA256.HashData(salt.Concat(identityHash).ToArray()));
+
         var v = BigInteger.ModPow(G, x, N);
 
-        // Compute u = H(A | B)
-        var uHash = SHA256.HashData(A.Concat(B).ToArray());
-        var u = ToBigInt(uHash);
+        // u = H(A | B) — A is the trimmed bytes actually sent
+        var u = ToBigInt(SHA256.HashData(A.Concat(B).ToArray()));
 
-        // Compute S = (B - k * v)^(a + u * x) mod N
-        var a = ToBigInt(_privateA);
+        // S = (B - k*v)^(a + u*x) mod N
         var bigB = ToBigInt(B);
         var k = ToBigInt(kHash);
 
-        var Kv = (bigB - k * v) % N;
-        if (Kv < 0) Kv += N;
-        var au = a + u * x;
-        var S = BigInteger.ModPow(Kv, au, N);
+        var kv = (bigB - k * v) % N;
+        if (kv.Sign < 0) kv += N;
+        var exp = a.Sign < 0 ? BigInteger.Add(a, u * x) : a + u * x;
+        var S = BigInteger.ModPow(kv, exp, N);
 
-        // K = H(S)
-        var SBytes = PadLeft(FromBigInt(S), 256);
-        var K = SHA256.HashData(SBytes);
+        var sTrimmed = FromBigInt(S);
+        var K = SHA256.HashData(sTrimmed);
 
-        // M1 = H(H(N) XOR H(g) | H(username) | salt | A | B | K)
-        var hNg = NHash.Zip(GHash, (a, b) => (byte)(a ^ b)).ToArray();
+        // M1 = H(H(N) XOR H(PAD(g)) | H(username) | salt | A | B | K)
+        var hNg = NHash.Zip(GHash, (a_, b) => (byte)(a_ ^ b)).ToArray();
         var hUser = SHA256.HashData(Encoding.UTF8.GetBytes(username));
         var M1 = SHA256.HashData(hNg.Concat(hUser).Concat(salt).Concat(A).Concat(B).Concat(K).ToArray());
 
@@ -106,49 +129,102 @@ public static class AppleSrp
     }
 
     /// <summary>
-    /// Verify server proof M2 = H(A | M1 | K)
+    /// Verify server proof M2 = H(A | M1 | K).
     /// </summary>
-    public static bool VerifyServerProof(byte[] A, byte[] M1, byte[] serverM2, byte[] salt,
-        string password, string username, int iterations, bool s2kFo)
+    public static bool VerifyServerProof(byte[] A, byte[] M1, byte[] serverM2,
+        byte[] salt, string password, byte[] B, string username, int iterations, bool s2kFo)
     {
-        var passwordDerived = DerivePassword(password, salt, iterations, s2kFo);
-        var xHash = SHA256.HashData(new byte[] { 0x3a }.Concat(passwordDerived).ToArray());
-        var x = ToBigInt(SHA256.HashData(salt.Concat(xHash).ToArray()));
-        var v = BigInteger.ModPow(G, x, N);
-        var uHash = SHA256.HashData(A.Concat(Convert.FromBase64String(Convert.ToBase64String(new byte[256]))).ToArray());
-        // Simplified: just recompute K and check M2
-        var a = ToBigInt(_privateA);
-        var k = ToBigInt(kHash);
-        var u = ToBigInt( SHA256.HashData(A.Concat(new byte[256]).ToArray()) );
+        var a = ToBigInt(_privateA ?? throw new InvalidOperationException("GeneratePublicKey must be called first"));
 
-        // Recompute session key
-        var S = BigInteger.ModPow((BigInteger.Zero - k * v) % N, a, N);
-        var SBytes = PadLeft(FromBigInt(S), 256);
-        var K = SHA256.HashData(SBytes);
+        var processed = DerivePassword(password, salt, iterations, s2kFo);
+        var colonPassword = new byte[1 + processed.Length];
+        colonPassword[0] = 0x3a;
+        Buffer.BlockCopy(processed, 0, colonPassword, 1, processed.Length);
+        var identityHash = SHA256.HashData(colonPassword);
+        var x = ToBigInt(SHA256.HashData(salt.Concat(identityHash).ToArray()));
+        var v = BigInteger.ModPow(G, x, N);
+        var u = ToBigInt(SHA256.HashData(A.Concat(B).ToArray()));
+        var k = ToBigInt(kHash);
+        var bigB = ToBigInt(B);
+
+        var kv = (bigB - k * v) % N;
+        if (kv.Sign < 0) kv += N;
+        var exp = a.Sign < 0 ? BigInteger.Add(a, u * x) : a + u * x;
+        var S = BigInteger.ModPow(kv, exp, N);
+
+        var sTrimmed = FromBigInt(S);
+        var K = SHA256.HashData(sTrimmed);
 
         var expectedM2 = SHA256.HashData(A.Concat(M1).Concat(K).ToArray());
         return expectedM2.SequenceEqual(serverM2);
     }
 
     /// <summary>
-    /// Generate placeholder Anisette data (only for testing, not real)
+    /// Decrypt the server-provided data (spd) using the raw premaster secret S.
+    /// key = HMAC-SHA256(S, "extra data key:")
+    /// iv  = HMAC-SHA256(S, "extra data iv:")[..16]
+    /// AES-256-CBC + PKCS7
     /// </summary>
-    public static AnisetteData GenerateAnisette()
+    public static byte[] DecryptServerProvidedData(byte[] salt, string password, byte[] A, byte[] B,
+        string username, int iterations, bool s2kFo, byte[] spd)
     {
-        var machineId = new byte[60];
-        var oneTimePassword = new byte[28];
-        RandomNumberGenerator.Fill(machineId);
-        RandomNumberGenerator.Fill(oneTimePassword);
+        var a = ToBigInt(_privateA ?? throw new InvalidOperationException("GeneratePublicKey must be called first"));
 
-        return new AnisetteData
-        {
-            MachineId = Convert.ToBase64String(machineId),
-            OneTimePassword = Convert.ToBase64String(oneTimePassword),
-            LocalUserId = Guid.NewGuid().ToString("N")[..32],
-            RoutingInfo = 17106176,
-            DeviceUniqueId = Guid.NewGuid().ToString("N")[..32],
-            SerialNumber = "F2LX1234ABCD"
-        };
+        var processed = DerivePassword(password, salt, iterations, s2kFo);
+        var colonPassword = new byte[1 + processed.Length];
+        colonPassword[0] = 0x3a;
+        Buffer.BlockCopy(processed, 0, colonPassword, 1, processed.Length);
+        var identityHash = SHA256.HashData(colonPassword);
+        var x = ToBigInt(SHA256.HashData(salt.Concat(identityHash).ToArray()));
+        var v = BigInteger.ModPow(G, x, N);
+        var u = ToBigInt(SHA256.HashData(A.Concat(B).ToArray()));
+        var k = ToBigInt(kHash);
+        var bigB = ToBigInt(B);
+
+        var kv = (bigB - k * v) % N;
+        if (kv.Sign < 0) kv += N;
+        var exp = a.Sign < 0 ? BigInteger.Add(a, u * x) : a + u * x;
+        var S = BigInteger.ModPow(kv, exp, N);
+
+        var sTrimmed = FromBigInt(S);
+
+        return DecryptSpdWithSessionKey(sTrimmed, spd);
+    }
+
+    /// <summary>
+    /// Decrypt spd given the raw session key (premaster secret) bytes.
+    /// </summary>
+    public static byte[] DecryptSpdWithSessionKey(byte[] sessionKey, byte[] spd)
+    {
+        var key = HmacSha256(sessionKey, "extra data key:");
+        var ivFull = HmacSha256(sessionKey, "extra data iv:");
+        var iv = new byte[16];
+        Buffer.BlockCopy(ivFull, 0, iv, 0, 16);
+
+        using var aes = Aes.Create();
+        aes.Key = key;
+        aes.IV = iv;
+        aes.Mode = CipherMode.CBC;
+        aes.Padding = PaddingMode.PKCS7;
+        using var dec = aes.CreateDecryptor();
+        return dec.TransformFinalBlock(spd, 0, spd.Length);
+    }
+
+    /// <summary>
+    /// Compute the apptokens checksum:
+    /// HMAC-SHA256(sessionKey, "apptokens" | adsid | appIdentifier)
+    /// </summary>
+    public static byte[] MakeChecksum(byte[] sessionKey, string adsid, string appIdentifier)
+    {
+        var input = Encoding.UTF8.GetBytes("apptokens" + adsid + appIdentifier);
+        using var hmac = new HMACSHA256(sessionKey);
+        return hmac.ComputeHash(input);
+    }
+
+    private static byte[] HmacSha256(byte[] key, string message)
+    {
+        using var hmac = new HMACSHA256(key);
+        return hmac.ComputeHash(Encoding.UTF8.GetBytes(message));
     }
 
     private static BigInteger ToBigInt(byte[] bytes)
@@ -158,15 +234,9 @@ public static class AppleSrp
 
     private static byte[] FromBigInt(BigInteger value)
     {
-        return value.ToByteArray().Reverse().SkipWhile(b => b == 0).Concat(new byte[] { 0 }).ToArray();
-    }
-
-    private static byte[] PadLeft(byte[] source, int totalLength)
-    {
-        if (source.Length >= totalLength) return source;
-        var result = new byte[totalLength];
-        Buffer.BlockCopy(source, 0, result, totalLength - source.Length, source.Length);
-        return result;
+        // ToByteArray() is little-endian (with a sign byte); reverse to big-endian
+        // and drop leading zero padding.
+        return value.ToByteArray().Reverse().SkipWhile(b => b == 0).ToArray();
     }
 
     private static byte[] HexToBytes(string hex)
@@ -179,29 +249,56 @@ public static class AppleSrp
 
 public class AnisetteData
 {
+    public const string DefaultClientInfo =
+        "<PC> <Windows;10.0.26100> <com.apple.AuthKitWin/1 (com.apple.iTunes/12.13.7)>";
+
     public string MachineId { get; set; } = string.Empty;
     public string OneTimePassword { get; set; } = string.Empty;
     public string LocalUserId { get; set; } = string.Empty;
     public long RoutingInfo { get; set; }
     public string DeviceUniqueId { get; set; } = string.Empty;
     public string SerialNumber { get; set; } = string.Empty;
+    public string ClientInfo { get; set; } = DefaultClientInfo;
+    public string Locale { get; set; } = "en_US";
+    public string TimeZone { get; set; } = "UTC";
+    public string ClientTime { get; set; } = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
 
-    /// <summary>
-    /// Convert to dictionary for plist/request building
-    /// </summary>
-    public Dictionary<string, string> ToDictionary()
+    public Dictionary<string, string> ToHeaders()
     {
         return new Dictionary<string, string>
         {
+            ["X-Apple-I-Client-Time"] = ClientTime,
+            ["X-Apple-I-TimeZone"] = TimeZone,
+            ["X-Apple-Locale"] = Locale,
             ["X-Apple-I-MD"] = OneTimePassword,
-            ["X-Apple-I-MD-M"] = MachineId,
             ["X-Apple-I-MD-LU"] = LocalUserId,
+            ["X-Apple-I-MD-M"] = MachineId,
             ["X-Apple-I-MD-RINFO"] = RoutingInfo.ToString(),
             ["X-Mme-Device-Id"] = DeviceUniqueId,
             ["X-Apple-I-SRL-NO"] = SerialNumber,
-            ["X-Apple-I-Client-Time"] = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
-            ["X-Apple-Locale"] = "en_US",
-            ["X-Apple-I-TimeZone"] = "GMT"
+            ["X-MMe-Client-Info"] = ClientInfo
+        };
+    }
+
+    public Dictionary<string, object> ToCpd()
+    {
+        return new Dictionary<string, object>
+        {
+            ["bootstrap"] = true,
+            ["capp"] = "akd",
+            ["ckgen"] = true,
+            ["icscrec"] = true,
+            ["loc"] = Locale,
+            ["pbe"] = false,
+            ["prkgen"] = true,
+            ["svct"] = "iCloud",
+            ["X-Apple-I-Client-Time"] = ClientTime,
+            ["X-Apple-I-TimeZone"] = TimeZone,
+            ["X-Apple-Locale"] = Locale,
+            ["X-Apple-I-MD"] = OneTimePassword,
+            ["X-Apple-I-MD-M"] = MachineId,
+            ["X-Apple-I-MD-RINFO"] = RoutingInfo.ToString(),
+            ["X-Mme-Device-Id"] = DeviceUniqueId,
         };
     }
 }

@@ -182,9 +182,30 @@ if ($ok) {
 Write-Host ""
 
 # =============================================
+# CoreADI.dll (本地 anisette, 已提交在仓库内)
+# =============================================
+Write-Host "[3/4] 复制 CoreADI.dll (本地 anisette)..." -ForegroundColor Yellow
+
+$coreAdiRepoSrc = Join-Path $PSScriptRoot "..\AltServer.Windows\tools\an\CoreADI.dll"
+if (Test-Path $coreAdiRepoSrc) {
+    $coreAdiDstDir = Join-Path $OutputDir "an"
+    if (-not (Test-Path $coreAdiDstDir)) {
+        New-Item -ItemType Directory -Path $coreAdiDstDir -Force | Out-Null
+    }
+    Copy-Item -Path $coreAdiRepoSrc -Destination $coreAdiDstDir -Force
+    $sz = [math]::Round((Get-Item (Join-Path $coreAdiDstDir "CoreADI.dll")).Length / 1MB, 2)
+    Write-Host "  ✓ CoreADI.dll ($sz MB) -> $coreAdiDstDir" -ForegroundColor Green
+} else {
+    Write-Host "  ⚠ 仓库未找到 CoreADI.dll: $coreAdiRepoSrc" -ForegroundColor DarkYellow
+    Write-Host "    可从 iTunes/Apple Application Support 复制 x64 CoreADI.dll 到 tools\an\" -ForegroundColor Gray
+}
+
+Write-Host ""
+
+# =============================================
 # 清理和结果
 # =============================================
-Write-Host "[3/3] 验证工具..." -ForegroundColor Yellow
+Write-Host "[4/4] 验证工具..." -ForegroundColor Yellow
 
 # 清理临时下载目录
 if (Test-Path $DownloadDir) {
@@ -209,6 +230,14 @@ foreach ($tool in $requiredTools) {
         Write-Host "  ✗ $tool - 缺失" -ForegroundColor Red
         $missing += $tool
     }
+}
+
+$adiPath = Join-Path $OutputDir "an\CoreADI.dll"
+if (Test-Path $adiPath) {
+    $sizeMB = [math]::Round((Get-Item $adiPath).Length / 1MB, 2)
+    Write-Host "  ✓ an\CoreADI.dll ($sizeMB MB) [本地 anisette]" -ForegroundColor Green
+} else {
+    Write-Host "  ⚠ an\CoreADI.dll - 缺失 (将回退到远程 anisette)" -ForegroundColor DarkYellow
 }
 
 Write-Host ""

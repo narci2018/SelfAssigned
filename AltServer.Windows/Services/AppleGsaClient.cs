@@ -223,7 +223,7 @@ public class AppleGsaClient : IDisposable
             _sessionKey = ExtractData(spdText, "sk") ?? Array.Empty<byte>();
             _sessionCookie = ExtractData(spdText, "c") ?? Array.Empty<byte>();
 
-            LogService.Info($"[GSA] spd 解密成功: adsid={_adsId}, GsIdmsToken={(_gsIdmsToken.Length > 24 ? _gsIdmsToken[..24] + "..." : _gsIdmsToken)}");
+            LogService.Info($"[GSA] spd 解密成功: adsid={_adsId}, GsIdmsToken={(_gsIdmsToken.Length > 24 ? _gsIdmsToken[..24] + "..." : _gsIdmsToken)}, sk_len={_sessionKey.Length}, c_len={_sessionCookie.Length}");
 
             if (string.IsNullOrEmpty(_adsId) || string.IsNullOrEmpty(_gsIdmsToken) || _sessionKey.Length == 0)
             {
@@ -448,6 +448,8 @@ public class AppleGsaClient : IDisposable
 
             var et = GetData(result, "et");
             LogService.Info($"[GSA] apptokens et length: {et?.Length ?? 0}, sessionKey length: {_sessionKey.Length}");
+            LogService.Info($"[GSA] apptokens et hex: {(et != null ? BitConverter.ToString(et[..Math.Min(32, et.Length)]) : "null")}");
+            LogService.Info($"[GSA] apptokens sessionKey hex: {BitConverter.ToString(_sessionKey[..Math.Min(32, _sessionKey.Length)])}");
             if (et == null || et.Length < 19)
             {
                 LogService.Warning($"[GSA] apptokens 无 et: hsc={GetInt(result, "hsc", 0)} ec={GetInt(result, "ec", -1)} em={GetString(result, "em", "")}");

@@ -146,7 +146,7 @@ public class SigningDiscoveryService
 
     private List<string> GetSearchDirectories()
     {
-        return new List<string>
+        var dirs = new List<string>
         {
             _baseDir,
             Path.Combine(_baseDir, "certs"),
@@ -154,6 +154,17 @@ public class SigningDiscoveryService
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Documents"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AltServer"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AltServer"),
+            @"C:\ProgramData\i4\i4tools\ipasign",
+            @"C:\ProgramData\i4\i4tools\ipasign\cnf",
+            @"C:\ProgramData\3u\3utools\ipasign",
+            @"C:\ProgramData\3u\3utools\ipasign\cnf",
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "i4", "i4tools", "ipasign"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "i4", "i4tools", "ipasign", "cnf"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "3u", "3utools", "ipasign"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "3u", "3utools", "ipasign", "cnf"),
         };
+        return dirs.Distinct().ToList();
     }
 }

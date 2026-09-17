@@ -102,8 +102,8 @@ public partial class AppleSetupDialog : Window
                     System.Windows.Media.Color.FromRgb(0x16, 0xA3, 0x4A));
                 LogService.Info("[Setup] 2FA verified successfully");
 
-                await Task.Delay(800);
-                ShowCertSelection();
+                await Task.Delay(500);
+                await HandlePostLoginAsync();
                 return;
             }
             catch (Exception ex)
@@ -171,15 +171,76 @@ public partial class AppleSetupDialog : Window
                 return;
             }
 
-            // Auth success, show certificate selection
-            LogService.Info("[Setup] Auth success, showing cert selection");
-            ShowCertSelection();
+            // Auth success, proceed to automated post-login setup
+            LogService.Info("[Setup] Auth success, proceeding to post-login setup");
+            await HandlePostLoginAsync();
         }
         catch (Exception ex)
         {
             LogService.Error($"[Setup] Exception: {ex}");
             ShowError($"Unexpected error: {ex.Message}");
         }
+    }
+
+    private async Task HandlePostLoginAsync()
+    {
+        StatusText.Text = "登录成功，正在自动配置签名环境...";
+        StatusText.Foreground = new System.Windows.Media.SolidColorBrush(
+            System.Windows.Media.Color.FromRgb(0x16, 0xA3, 0x4A));
+        StatusText.Visibility = Visibility.Visible;
+        ProgressBar.Visibility = Visibility.Visible;
+        ProgressBar.IsIndeterminate = true;
+
+        try
+        {
+            var settings = new SettingsService();
+            var deviceService = new DeviceService(settings.ResolveToolsDir());
+            var devices = await Task.Run(() => deviceService.ListDevices());
+
+            if (_gsaClient != null && devices.Count > 0)
+            {
+                StatusText.Text = "正在自动申请免费开发者证书与描述文件...";
+                LogService.Info("[Setup] 尝试自动申请开发证书与描述文件...");
+
+                var dev = devices[0];
+                var provisionService = new AppleProvisionService(_gsaClient, _dataDir);
+                provisionService.Progress += msg => Dispatcher.Invoke(() => StatusText.Text = msg);
+
+                var bundleId = "com.selfassigned.altserver";
+                var appName = "AltServer";
+                var provResult = await provisionService.AutoProvisionAsync(bundleId, appName, dev.Name, dev.Udid);
+
+                if (provResult.Success && !string.IsNullOrEmpty(provResult.P12Path) && !string.IsNullOrEmpty(provResult.ProvisionPath))
+                {
+                    LogService.Success("[Setup] 自动获取证书与描述文件成功！");
+                    ResultP12Path = provResult.P12Path;
+                    ResultProvisionPath = provResult.ProvisionPath;
+
+                    settings.Data.AppleId = _appleId;
+                    settings.Data.AnisetteUrl = AnisetteUrlBox.Text.Trim();
+                    settings.Data.P12Path = provResult.P12Path;
+                    settings.Data.MobileProvisionPath = provResult.ProvisionPath;
+                    settings.Data.SetupCompleted = true;
+                    settings.Save();
+
+                    _completed = true;
+                    StatusText.Text = "自动配置完成！";
+                    await Task.Delay(1000);
+                    Close();
+                    return;
+                }
+                else
+                {
+                    LogService.Warning($"[Setup] 自动配置提示: {provResult.ErrorMessage}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Warning($"[Setup] 自动配置异常: {ex.Message}");
+        }
+
+        ShowCertSelection();
     }
 
     private void OnCompleteConfig(object sender, RoutedEventArgs e)
@@ -223,11 +284,35 @@ public partial class AppleSetupDialog : Window
         CertPanel.Visibility = Visibility.Visible;
         SubmitBtn.Content = "Complete Config";
         StatusText.Visibility = Visibility.Collapsed;
+        ProgressBar.Visibility = Visibility.Collapsed;
+        ProgressBar.IsIndeterminate = false;
         SubmitBtn.IsEnabled = true;
 
         AuthStatusBorder.Visibility = Visibility.Visible;
         AuthStatusText.Text = "Apple ID login successful!";
         AuthStatusHint.Text = "Please provide code signing certificate (.p12) and provisioning profile (.mobileprovision), or configure later in settings";
+
+        try
+        {
+            var discovery = new SigningDiscoveryService();
+            var certs = discovery.DiscoverP12Files();
+            var provisions = discovery.DiscoverProvisionProfiles();
+
+            if (certs.Count > 0 && string.IsNullOrEmpty(P12PathBox.Text))
+            {
+                P12PathBox.Text = certs[0].Thumbprint;
+                LogService.Info($"[Setup] 自动预填本地发现的证书: {certs[0].Subject} ({certs[0].Thumbprint})");
+            }
+            if (provisions.Count > 0 && string.IsNullOrEmpty(ProvisionPathBox.Text))
+            {
+                ProvisionPathBox.Text = provisions[0].Path;
+                LogService.Info($"[Setup] 自动预填本地发现的描述文件: {provisions[0].Name} ({provisions[0].Path})");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Warning($"[Setup] 扫描本地证书配置异常: {ex.Message}");
+        }
     }
 
     private void OnBrowseP12(object sender, RoutedEventArgs e)

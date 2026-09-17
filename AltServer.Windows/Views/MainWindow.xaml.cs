@@ -220,11 +220,27 @@ public partial class MainWindow : Window
     private void OnCopyAllLogs(object sender, RoutedEventArgs e)
     {
         var text = string.Join(Environment.NewLine, ViewModel.LogEntries);
-        if (!string.IsNullOrEmpty(text))
+        if (string.IsNullOrEmpty(text)) return;
+
+        for (int i = 0; i < 5; i++)
         {
-            System.Windows.Clipboard.SetText(text);
-            LogService.Info("日志已复制到剪贴板");
+            try
+            {
+                System.Windows.Clipboard.SetDataObject(text, true);
+                LogService.Info("日志已复制到剪贴板");
+                return;
+            }
+            catch (System.Runtime.InteropServices.COMException)
+            {
+                System.Threading.Thread.Sleep(50);
+            }
+            catch (Exception ex)
+            {
+                LogService.Warning($"复制日志失败: {ex.Message}");
+                return;
+            }
         }
+        LogService.Warning("复制日志失败: 剪贴板被其他程序占用");
     }
 
     private void OnScanSigningConfig(object sender, RoutedEventArgs e)

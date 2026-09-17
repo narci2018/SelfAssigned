@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using System.Runtime.InteropServices;
 
 namespace AltServer.Windows.Services;
 
@@ -385,6 +386,13 @@ public class AppleGsaClient : IDisposable
             if (string.IsNullOrEmpty(_adsId) || string.IsNullOrEmpty(_gsIdmsToken) || _sessionKey.Length == 0)
                 return AuthResult.Error("无法从服务器响应提取令牌");
 
+            // ---------- apptokens ----------
+            var appToken = await FetchAppTokenAsync(salt, _srpPassword, publicA, serverB, _srpAppleId, iterations, s2kFo, await GetAnisetteAsync() ?? new AnisetteData());
+            if (appToken != null)
+            {
+                AuthToken = appToken;
+            }
+
             IsAuthenticated = true;
             return AuthResult.Success;
         }
@@ -455,17 +463,17 @@ public class AppleGsaClient : IDisposable
             var et = GetData(result, "et");
             LogService.Info($"[GSA] apptokens et length: {et?.Length ?? 0}");
             LogService.Info($"[GSA] apptokens et hex (first 64): {(et != null ? BitConverter.ToString(et[..Math.Min(64, et.Length)]) : "null")}");
-            if (et == null || et.Length < 31)
+            if (et == null || et.Length < 35)
             {
                 LogService.Warning($"[GSA] apptokens 无 et 或太短: hsc={GetInt(result, "hsc", 0)} ec={GetInt(result, "ec", -1)} em={GetString(result, "em", "")}");
                 return null;
             }
 
-            // Apple et format: [3-byte magic][12-byte IV][encrypted_token][16-byte GCM tag]
-            // Total = 3 + 12 + N + 16 = N + 31
+            // Apple et format: [3-byte magic][16-byte IV][ciphertext][16-byte GCM tag]
+            // Total = 3 + 16 + N + 16 = N + 35
             var magic = et[..3];  // "XYZ" or similar
-            var iv = et[3..15];
-            var ciphertextWithAuthTag = et[15..];  // Last 16 bytes are the GCM tag
+            var iv = et[3..19];   // 16 bytes IV
+            var ciphertextWithAuthTag = et[19..];  // Last 16 bytes are the GCM tag
 
             // Split ciphertext and auth tag
             var ciphertext = ciphertextWithAuthTag[..^16];
@@ -501,6 +509,46 @@ public class AppleGsaClient : IDisposable
         }
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO
+    {
+        public int cbSize;
+        public int dwInfoVersion;
+        public IntPtr pbNonce;
+        public int cbNonce;
+        public IntPtr pbAuthData;
+        public int cbAuthData;
+        public IntPtr pbTag;
+        public int cbTag;
+        public IntPtr pbMacContext;
+        public int cbMacContext;
+        public int cbAAD;
+        public long cbData;
+        public int dwFlags;
+    }
+
+    [DllImport("bcrypt.dll", CharSet = CharSet.Unicode)]
+    private static extern int BCryptOpenAlgorithmProvider(out IntPtr phAlgorithm, string pszAlgId, string? pszImplementation, int dwFlags);
+
+    [DllImport("bcrypt.dll", CharSet = CharSet.Unicode)]
+    private static extern int BCryptSetProperty(IntPtr hObject, string pszProperty, byte[] pbInput, int cbInput, int dwFlags);
+
+    [DllImport("bcrypt.dll")]
+    private static extern int BCryptGenerateSymmetricKey(IntPtr hAlgorithm, out IntPtr phKey, IntPtr pbKeyObject, int cbKeyObject, byte[] pbSecret, int cbSecret, int dwFlags);
+
+    [DllImport("bcrypt.dll")]
+    private static extern int BCryptDecrypt(IntPtr hKey, byte[] pbInput, int cbInput, ref BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO pPaddingInfo, IntPtr pbIV, int cbIV, byte[] pbOutput, int cbOutput, out int pcbResult, int dwFlags);
+
+    [DllImport("bcrypt.dll")]
+    private static extern int BCryptDestroyKey(IntPtr hKey);
+
+    [DllImport("bcrypt.dll")]
+    private static extern int BCryptCloseAlgorithmProvider(IntPtr hAlgorithm, int dwFlags);
+
+    private const string BCRYPT_AES_ALGORITHM = "AES";
+    private const string BCRYPT_CHAINING_MODE = "ChainingMode";
+    private const string BCRYPT_CHAIN_MODE_GCM = "ChainingModeGCM";
+
     private static byte[]? AesGcmDecrypt(byte[] key, byte[] iv, byte[] ciphertext, byte[] tag, byte[] aad)
     {
         try
@@ -510,27 +558,119 @@ public class AppleGsaClient : IDisposable
                 LogService.Error($"[GSA] AesGcmDecrypt: invalid key length {key.Length}");
                 return null;
             }
-            if (iv.Length != 12)
-            {
-                LogService.Error($"[GSA] AesGcmDecrypt: invalid iv length {iv.Length}");
-                return null;
-            }
             if (tag.Length != 16)
             {
                 LogService.Error($"[GSA] AesGcmDecrypt: invalid tag length {tag.Length}");
                 return null;
             }
 
-            using var aes = new AesGcm(key, tag.Length);
-            var plain = new byte[ciphertext.Length];
-            aes.Decrypt(iv, ciphertext, tag, plain, aad);
-            LogService.Info($"[GSA] apptokens AES-GCM 解密成功，明文长度: {plain.Length}");
-            return plain;
+            if (iv.Length == 12)
+            {
+                try
+                {
+                    using var aes = new AesGcm(key, tag.Length);
+                    var plain = new byte[ciphertext.Length];
+                    aes.Decrypt(iv, ciphertext, tag, plain, aad);
+                    LogService.Info($"[GSA] apptokens .NET AesGcm 解密成功，明文长度: {plain.Length}");
+                    return plain;
+                }
+                catch (Exception ex)
+                {
+                    LogService.Warning($"[GSA] .NET AesGcm 解密失败，回退 CNG: {ex.Message}");
+                }
+            }
+
+            var plainCng = CngAesGcmDecrypt(key, iv, ciphertext, tag, aad);
+            if (plainCng != null)
+            {
+                LogService.Info($"[GSA] apptokens CNG BCryptDecrypt 解密成功，明文长度: {plainCng.Length}");
+                return plainCng;
+            }
+
+            return null;
         }
         catch (Exception ex)
         {
             LogService.Error($"[GSA] AesGcmDecrypt 异常: {ex.GetType().Name}: {ex.Message}");
             return null;
+        }
+    }
+
+    private static byte[]? CngAesGcmDecrypt(byte[] key, byte[] iv, byte[] ciphertext, byte[] tag, byte[] aad)
+    {
+        IntPtr hAlg = IntPtr.Zero;
+        IntPtr hKey = IntPtr.Zero;
+        GCHandle nonceHandle = default;
+        GCHandle tagHandle = default;
+        GCHandle aadHandle = default;
+
+        try
+        {
+            int status = BCryptOpenAlgorithmProvider(out hAlg, BCRYPT_AES_ALGORITHM, null, 0);
+            if (status != 0)
+            {
+                LogService.Error($"[GSA] BCryptOpenAlgorithmProvider failed: 0x{status:X8}");
+                return null;
+            }
+
+            byte[] chainingMode = Encoding.Unicode.GetBytes(BCRYPT_CHAIN_MODE_GCM + "\0");
+            status = BCryptSetProperty(hAlg, BCRYPT_CHAINING_MODE, chainingMode, chainingMode.Length, 0);
+            if (status != 0)
+            {
+                LogService.Error($"[GSA] BCryptSetProperty ChainingMode failed: 0x{status:X8}");
+                return null;
+            }
+
+            status = BCryptGenerateSymmetricKey(hAlg, out hKey, IntPtr.Zero, 0, key, key.Length, 0);
+            if (status != 0)
+            {
+                LogService.Error($"[GSA] BCryptGenerateSymmetricKey failed: 0x{status:X8}");
+                return null;
+            }
+
+            nonceHandle = GCHandle.Alloc(iv, GCHandleType.Pinned);
+            tagHandle = GCHandle.Alloc(tag, GCHandleType.Pinned);
+            if (aad != null && aad.Length > 0)
+                aadHandle = GCHandle.Alloc(aad, GCHandleType.Pinned);
+
+            var authInfo = new BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO
+            {
+                cbSize = Marshal.SizeOf<BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO>(),
+                dwInfoVersion = 1,
+                pbNonce = nonceHandle.AddrOfPinnedObject(),
+                cbNonce = iv.Length,
+                pbTag = tagHandle.AddrOfPinnedObject(),
+                cbTag = tag.Length,
+                pbAuthData = aadHandle.IsAllocated ? aadHandle.AddrOfPinnedObject() : IntPtr.Zero,
+                cbAuthData = aad?.Length ?? 0
+            };
+
+            byte[] plaintext = new byte[ciphertext.Length];
+            status = BCryptDecrypt(hKey, ciphertext, ciphertext.Length, ref authInfo, IntPtr.Zero, 0, plaintext, plaintext.Length, out int cbResult, 0);
+            if (status != 0)
+            {
+                LogService.Error($"[GSA] BCryptDecrypt failed: 0x{status:X8}");
+                return null;
+            }
+
+            if (cbResult < plaintext.Length)
+            {
+                Array.Resize(ref plaintext, cbResult);
+            }
+            return plaintext;
+        }
+        catch (Exception ex)
+        {
+            LogService.Error($"[GSA] CngAesGcmDecrypt 异常: {ex}");
+            return null;
+        }
+        finally
+        {
+            if (nonceHandle.IsAllocated) nonceHandle.Free();
+            if (tagHandle.IsAllocated) tagHandle.Free();
+            if (aadHandle.IsAllocated) aadHandle.Free();
+            if (hKey != IntPtr.Zero) BCryptDestroyKey(hKey);
+            if (hAlg != IntPtr.Zero) BCryptCloseAlgorithmProvider(hAlg, 0);
         }
     }
 

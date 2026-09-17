@@ -41,13 +41,32 @@ public class AppleProvisionService
         Directory.CreateDirectory(Path.Combine(_dataDir, "profiles"));
     }
 
+    public AppleProvisionService(AppleGsaClient gsa, string dataDir)
+    {
+        _dataDir = dataDir;
+        ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;
+        _gsa = gsa;
+        _adsId = gsa.AdsId ?? string.Empty;
+        _gsIdmsToken = gsa.GsIdmsToken ?? string.Empty;
+        _http = new HttpClient(new HttpClientHandler
+        {
+            AutomaticDecompression = DecompressionMethods.All,
+            AllowAutoRedirect = true
+        })
+        {
+            Timeout = TimeSpan.FromSeconds(30)
+        };
+        Directory.CreateDirectory(Path.Combine(_dataDir, "certs"));
+        Directory.CreateDirectory(Path.Combine(_dataDir, "profiles"));
+    }
+
     // MARK: - 认证（GSA/SRP 流程）
 
     public async Task<AuthResult> SignInAsync(string appleId, string password)
     {
         var result = await _gsa.AuthenticateAsync(appleId, password);
         // 认证成功后保存会话 token
-        if (result.Status == AuthStatus.Success && !result.Message.Contains("apptokens"))
+        if (result.Status == AuthStatus.Success)
         {
             _adsId = _gsa.AdsId ?? string.Empty;
             _gsIdmsToken = _gsa.GsIdmsToken ?? string.Empty;
@@ -324,6 +343,8 @@ public class AppleProvisionService
         var gsToken = BuildGSIdentityToken();
         if (!string.IsNullOrEmpty(gsToken))
             request.Headers.Add("X-Apple-Identity-Token", gsToken);
+        if (!string.IsNullOrEmpty(_gsa.AuthToken))
+            request.Headers.Add("X-Apple-GS-Token", _gsa.AuthToken);
         request.Headers.Add("X-Requested-With", "XMLHttpRequest");
         request.Headers.Add("User-Agent", "Xcode");
         request.Headers.Add("Accept", "application/json");

@@ -437,6 +437,15 @@ public class AppleGsaClient : IDisposable
                 return null;
             }
 
+            LogService.Info($"[GSA] apptokens 响应 keys: {string.Join(", ", result.Keys)}");
+            LogService.Info($"[GSA] apptokens hsc={GetInt(result, "hsc", 0)} ec={GetInt(result, "ec", -1)}");
+
+            // 尝试从 Response dict 中提取（某些服务器返回嵌套结构）
+            if (result.TryGetValue("Response", out var responseVal))
+            {
+                LogService.Info($"[GSA] apptokens 有 Response 包装，尝试解析...");
+            }
+
             var et = GetData(result, "et");
             LogService.Info($"[GSA] apptokens et length: {et?.Length ?? 0}, sessionKey length: {_sessionKey.Length}");
             if (et == null || et.Length < 19)

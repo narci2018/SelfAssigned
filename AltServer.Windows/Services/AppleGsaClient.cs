@@ -479,7 +479,7 @@ public class AppleGsaClient : IDisposable
             var plain = AesGcmDecrypt(_sessionKey, iv, ciphertext, authTag, magic);
             if (plain == null)
             {
-                LogService.Error($"[GSA] apptokens AES-GCM 解密失败 - keyLen={_sessionKey.Length}, ivLen={iv.Length}, ctLen={encryptedToken.Length}, tagLen={tag.Length}");
+                LogService.Error($"[GSA] apptokens AES-GCM 解密失败 - keyLen={_sessionKey.Length}, ivLen={iv.Length}, ctLen={ciphertext.Length}, tagLen={authTag.Length}");
                 return null;
             }
 

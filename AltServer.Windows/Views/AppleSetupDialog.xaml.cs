@@ -10,6 +10,7 @@ public partial class AppleSetupDialog : Window
     private readonly string _dataDir;
     private bool _completed;
     private bool _waitingFor2FA;
+    private bool _inCertSelection;
     private AppleGsaClient? _gsaClient;
     private string _appleId = string.Empty;
     private string _password = string.Empty;
@@ -38,6 +39,12 @@ public partial class AppleSetupDialog : Window
 
     private async void OnSubmit(object sender, RoutedEventArgs e)
     {
+        if (_inCertSelection)
+        {
+            OnCompleteConfig(sender, e);
+            return;
+        }
+
         var appleId = AppleIdBox.Text.Trim();
         var password = PasswordBox.Password;
 
@@ -211,12 +218,12 @@ public partial class AppleSetupDialog : Window
 
     private void ShowCertSelection()
     {
+        _inCertSelection = true;
         LoginPanel.Visibility = Visibility.Collapsed;
         CertPanel.Visibility = Visibility.Visible;
         SubmitBtn.Content = "Complete Config";
         StatusText.Visibility = Visibility.Collapsed;
         SubmitBtn.IsEnabled = true;
-        SubmitBtn.Click += OnCompleteConfig;
 
         AuthStatusBorder.Visibility = Visibility.Visible;
         AuthStatusText.Text = "Apple ID login successful!";
@@ -225,7 +232,7 @@ public partial class AppleSetupDialog : Window
 
     private void OnBrowseP12(object sender, RoutedEventArgs e)
     {
-        var dlg = new OpenFileDialog
+        var dlg = new Microsoft.Win32.OpenFileDialog
         {
             Title = "Select Certificate File",
             Filter = "Certificate files (*.p12)|*.p12|All files (*.*)|*.*"
@@ -238,7 +245,7 @@ public partial class AppleSetupDialog : Window
 
     private void OnBrowseProvision(object sender, RoutedEventArgs e)
     {
-        var dlg = new OpenFileDialog
+        var dlg = new Microsoft.Win32.OpenFileDialog
         {
             Title = "Select Provisioning Profile",
             Filter = "Provisioning profiles (*.mobileprovision)|*.mobileprovision|All files (*.*)|*.*"

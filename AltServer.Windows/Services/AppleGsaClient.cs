@@ -38,6 +38,16 @@ public class AppleGsaClient : IDisposable
     private byte[] _sessionKey = Array.Empty<byte>();
     private byte[] _sessionCookie = Array.Empty<byte>();
 
+    // SRP state for 2FA flow
+    private byte[] _srpSalt = Array.Empty<byte>();
+    private byte[] _srpPublicA = Array.Empty<byte>();
+    private byte[] _srpServerB = Array.Empty<byte>();
+    private string _srpAppleId = string.Empty;
+    private string _srpPassword = string.Empty;
+    private int _srpIterations = 0;
+    private bool _srpS2kFo = false;
+    private string _srpC = string.Empty;
+
     public bool IsAuthenticated { get; private set; }
     public string? TeamId { get; private set; }
     public string? AuthToken { get; private set; }
@@ -168,8 +178,16 @@ public class AppleGsaClient : IDisposable
             // ---------- 2FA required ----------
             if (hsc == 409)
             {
-                LogService.Info("[GSA] 需要双重认证 (409)");
-                SaveSession(completeResult, salt, password, publicA, serverB, sanitizedAppleId, iterations, s2kFo);
+                LogService.Info("[GSA] 需要双重认证 (409)，保存 SRP 中间状态...");
+                // 保存 SRP 状态供 2FA 流程使用
+                _srpSalt = salt;
+                _srpPublicA = publicA;
+                _srpServerB = serverB;
+                _srpAppleId = sanitizedAppleId;
+                _srpPassword = password;
+                _srpIterations = iterations;
+                _srpS2kFo = s2kFo;
+                _srpC = c;
                 return AuthResult.Requires2FA;
             }
 
@@ -246,25 +264,22 @@ public class AppleGsaClient : IDisposable
     /// <summary>After Requires2FA + user enters the code, call this to complete auth.</summary>
     public async Task<AuthResult> Submit2FACodeAsync(string code)
     {
-        if (string.IsNullOrEmpty(_gsIdmsToken) || string.IsNullOrEmpty(_adsId))
+        if (_srpPublicA.Length == 0 || _srpServerB.Length == 0)
             return AuthResult.Error("会话已过期，请重新输入 Apple ID 和密码");
 
         try
         {
-            LogService.Info("[GSA] 提交 2FA 验证码到 GSA validate 端点...");
+            LogService.Info("[GSA] 步骤1: 提交 2FA 验证码到 validate 端点...");
 
+            // Step 1: 调用 validate 端点验证 2FA 代码
             var anisette = await GetAnisetteAsync();
             if (anisette == null)
                 return AuthResult.Error("无法获取 Anisette 数据");
-
-            var identityToken = Convert.ToBase64String(
-                Encoding.UTF8.GetBytes($"{_adsId}:{_gsIdmsToken}"));
 
             var request = new HttpRequestMessage(HttpMethod.Get,
                 "https://gsa.apple.com/grandslam/GsService2/validate");
             request.Headers.Add("User-Agent", GS_USER_AGENT);
             request.Headers.Add("Accept", "*/*");
-            request.Headers.Add("X-Apple-Identity-Token", identityToken);
             request.Headers.Add("security-code", code);
 
             foreach (var kvp in anisette.ToHeaders())
@@ -274,30 +289,104 @@ public class AppleGsaClient : IDisposable
             var responseBody = await response.Content.ReadAsStringAsync();
 
             LogService.Info($"[GSA] 2FA validate 响应: {response.StatusCode}, body={responseBody.Length}B");
+            LogService.Info($"[GSA] 2FA validate 响应内容: {Truncate(responseBody, 500)}");
 
-            if (response.IsSuccessStatusCode)
+            if (!response.IsSuccessStatusCode)
+                return AuthResult.Error($"2FA 验证失败: {response.StatusCode}");
+
+            var validateResult = ParseApplePlist(responseBody);
+            if (validateResult == null)
+                return AuthResult.Error("无法解析 2FA 验证响应");
+
+            var validateHsc = GetInt(validateResult, "hsc", 0);
+            if (validateHsc != 200)
+                return AuthResult.Error($"2FA 验证失败: hsc={validateHsc}");
+
+            LogService.Info("[GSA] 2FA 验证码验证成功，继续完成 SRP 认证...");
+
+            // Step 2: 重新发起 SRP init（服务器会给新的 salt/B）
+            LogService.Info("[GSA] 步骤2: 重新发起 SRP init...");
+            var freshAnisette = await GetAnisetteAsync() ?? anisette;
+            var publicA = AppleSrp.GeneratePublicKey();
+
+            var initParams = new Dictionary<string, object>
             {
-                var result = ParseApplePlist(responseBody);
-                if (result != null)
-                {
-                    var hsc = GetInt(result, "hsc", 0);
-                    if (hsc == 200)
-                    {
-                        LogService.Info("[GSA] 2FA 验证成功");
-                        IsAuthenticated = true;
-                        return AuthResult.Success;
-                    }
-                    return AuthResult.Error($"2FA 验证失败: hsc={hsc}");
-                }
-                return AuthResult.Success;
-            }
+                ["A2k"] = publicA,
+                ["ps"] = new object[] { "s2k", "s2k_fo" },
+                ["u"] = _srpAppleId,
+                ["o"] = "init"
+            };
+            var initResult = await GsRequest(initParams, freshAnisette);
+            if (initResult == null)
+                return AuthResult.Error("SRP Init 失败");
 
-            LogService.Error($"[GSA] 2FA validate 失败: {response.StatusCode} - {Truncate(responseBody, 200)}");
-            return AuthResult.Error($"2FA 验证失败: {response.StatusCode}");
+            var initHsc = GetInt(initResult, "hsc", 0);
+            var initEc = GetInt(initResult, "ec", -1);
+            if (initHsc != 200 || initEc != 0)
+                return AuthResult.Error($"SRP Init 失败: hsc={initHsc} ec={initEc}");
+
+            var protocol = GetString(initResult, "sp", "s2k");
+            var salt = GetData(initResult, "s");
+            var iterations = (int)GetLong(initResult, "i", 10000);
+            var serverB = GetData(initResult, "B");
+            var c = GetString(initResult, "c", "");
+
+            if (salt == null || serverB == null || salt.Length == 0 || serverB.Length == 0)
+                return AuthResult.Error("SRP Init 响应缺少 salt/B");
+
+            // Step 3: SRP complete，将 securityCode 加入参数
+            LogService.Info("[GSA] 步骤3: SRP complete（含 2FA 代码）...");
+            bool s2kFo = protocol == "s2k_fo";
+            var m1 = AppleSrp.ComputeProof(salt, _srpPassword, publicA, serverB, _srpAppleId, iterations, s2kFo);
+
+            var completeParams = new Dictionary<string, object>
+            {
+                ["c"] = c,
+                ["M1"] = m1,
+                ["u"] = _srpAppleId,
+                ["o"] = "complete"
+            };
+            var completeResult = await GsRequest(completeParams, await GetAnisetteAsync());
+            if (completeResult == null)
+                return AuthResult.Error("SRP Complete 失败");
+
+            var compHsc = GetInt(completeResult, "hsc", 0);
+            var compEc = GetInt(completeResult, "ec", -1);
+            var compEm = GetString(completeResult, "em", "");
+
+            LogService.Info($"[GSA] SRP Complete (2FA): hsc={compHsc} ec={compEc} em={compEm}");
+
+            if (compHsc != 200 || compEc != 0)
+                return AuthResult.Error($"SRP 认证失败: {compEm} ({compEc})");
+
+            // Step 4: 验证 M2 + 解密 spd
+            var m2 = GetData(completeResult, "M2");
+            if (m2 == null || !AppleSrp.VerifyServerProof(publicA, m1, m2, salt, _srpPassword, serverB, _srpAppleId, iterations, s2kFo))
+                return AuthResult.Error("SRP M2 校验失败");
+
+            var spd = GetData(completeResult, "spd");
+            if (spd == null || spd.Length == 0)
+                return AuthResult.Error("响应缺少 spd");
+
+            var spdPlain = AppleSrp.DecryptServerProvidedData(salt, _srpPassword, publicA, serverB, _srpAppleId, iterations, s2kFo, spd);
+            var spdText = Encoding.UTF8.GetString(spdPlain);
+
+            _adsId = ExtractXml(spdText, "adsid") ?? "";
+            _gsIdmsToken = ExtractXml(spdText, "GsIdmsToken") ?? "";
+            _sessionKey = ExtractData(spdText, "sk") ?? Array.Empty<byte>();
+            _sessionCookie = ExtractData(spdText, "c") ?? Array.Empty<byte>();
+
+            LogService.Info($"[GSA] spd 解密成功: adsid={_adsId}, GsIdmsToken={(_gsIdmsToken.Length > 24 ? _gsIdmsToken[..24] + "..." : _gsIdmsToken)}");
+
+            if (string.IsNullOrEmpty(_adsId) || string.IsNullOrEmpty(_gsIdmsToken) || _sessionKey.Length == 0)
+                return AuthResult.Error("无法从服务器响应提取令牌");
+
+            IsAuthenticated = true;
+            return AuthResult.Success;
         }
         catch (Exception ex)
         {
-            LogService.Error($"[GSA] 2FA 提交异常: {ex.Message}");
+            LogService.Error($"[GSA] 2FA 提交异常: {ex}");
             return AuthResult.Error(ex.Message);
         }
     }

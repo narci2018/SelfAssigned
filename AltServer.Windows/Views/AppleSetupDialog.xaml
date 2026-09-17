@@ -1,7 +1,7 @@
 <Window x:Class="AltServer.Windows.Views.AppleSetupDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Apple ID 配置" Height="440" Width="440"
+        Title="Apple ID 配置" Height="520" Width="440"
         WindowStartupLocation="CenterOwner"
         Background="#F8FAFC" ResizeMode="NoResize">
 
@@ -59,6 +59,16 @@
             <PasswordBox x:Name="PasswordBox" FontSize="14" Padding="10,8"
                          BorderBrush="#CBD5E1" BorderThickness="1" Background="White"
                          Margin="0,0,0,14" />
+
+            <TextBlock x:Name="TwoFaLabel" Text="双重认证码" FontSize="13" Margin="0,0,0,6"
+                       Visibility="Collapsed" />
+            <TextBox x:Name="TwoFaCodeBox" FontSize="14" Padding="10,8"
+                     BorderBrush="#CBD5E1" BorderThickness="1" Background="White"
+                     Margin="0,0,0,14" Visibility="Collapsed"
+                     HorizontalContentAlignment="Center" />
+            <TextBlock x:Name="TwoFaHint" Text="请在 iPhone/可信设备上点击\"允许\"后，输入收到的 6 位验证码"
+                       FontSize="11" Foreground="#94A3B8" Margin="0,0,0,10"
+                       Visibility="Collapsed" TextWrapping="Wrap" />
 
             <TextBlock Text="Anisette 服务器 (可选)" FontSize="13" Margin="0,0,0,6" />
             <TextBox x:Name="AnisetteUrlBox" FontSize="13" Padding="10,8"

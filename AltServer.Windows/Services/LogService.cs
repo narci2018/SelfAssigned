@@ -48,6 +48,7 @@ public static class LogService
     }
 
     public static void Info(string message) => Write(message, LogLevel.Info);
+    public static void Debug(string message) => Write(message, LogLevel.Info);
     public static void Success(string message) => Write(message, LogLevel.Success);
     public static void Warning(string message) => Write(message, LogLevel.Warning);
     public static void Error(string message) => Write(message, LogLevel.Error);

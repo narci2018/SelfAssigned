@@ -53,7 +53,7 @@ public class AppleProvisionService
         return await _gsa.Submit2FACodeAsync(code);
     }
 
-    private string BuildIdentityToken()
+    private string BuildGSIdentityToken()
     {
         if (string.IsNullOrEmpty(_adsId) || string.IsNullOrEmpty(_gsIdmsToken))
             return string.Empty;
@@ -72,14 +72,12 @@ public class AppleProvisionService
 
         try
         {
-            // 1. 获取团队
-            Progress?.Invoke("获取开发者团队信息...");
-            var teams = await GetTeamsAsync();
-            if (teams.Count == 0)
-                throw new InvalidOperationException("未找到开发者团队，请确认 Apple ID 已加入开发者计划");
+            // 1. 直接使用 GSA 返回的 adsid 作为团队 ID
+            if (string.IsNullOrEmpty(_adsId))
+                throw new InvalidOperationException("未获取到开发者团队 ID，请重新登录");
 
-            result.TeamName = teams[0].TeamName;
-            result.TeamId = teams[0].TeamId;
+            result.TeamId = _adsId;
+            result.TeamName = $"Apple Developer ({_adsId})";
 
             // 2. 注册设备
             Progress?.Invoke($"注册设备 {deviceName}...");
@@ -297,9 +295,9 @@ public class AppleProvisionService
 
     private void AddPortalHeaders(HttpRequestMessage request)
     {
-        var identityToken = BuildIdentityToken();
-        if (!string.IsNullOrEmpty(identityToken))
-            request.Headers.Add("X-Apple-Identity-Token", identityToken);
+        var gsToken = BuildGSIdentityToken();
+        if (!string.IsNullOrEmpty(gsToken))
+            request.Headers.Add("X-Apple-GS-Token", gsToken);
         request.Headers.Add("X-Requested-With", "XMLHttpRequest");
         request.Headers.Add("User-Agent", "Xcode");
         request.Headers.Add("Accept", "application/json");

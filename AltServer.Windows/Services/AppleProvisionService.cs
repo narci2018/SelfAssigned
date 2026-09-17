@@ -165,15 +165,18 @@ public class AppleProvisionService
         }
     }
 
-    // MARK: - 开发者门户 API（使用 GsIdmsToken 认证）
+    // MARK: - 开发者门户 API（使用 GsIdmsToken 直接认证）
 
     private async Task<List<DeveloperTeam>> GetTeamsAsync()
     {
+        // 使用 GsIdmsToken 直接调用开发者门户 API
         var request = new HttpRequestMessage(HttpMethod.Get,
             "https://developer.apple.com/services/QH65B2/idmsa/webauth/getTeams");
         AddPortalHeaders(request);
         var response = await _http.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
+
+        LogService.Info($"[Provision] getTeams 响应: {response.StatusCode}, body={Truncate(body, 200)}");
 
         if (!response.IsSuccessStatusCode)
             throw new AppleAuthException($"获取团队列表失败: {response.StatusCode} - {Truncate(body, 200)}");

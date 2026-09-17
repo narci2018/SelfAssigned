@@ -2,20 +2,26 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
-using System.Text.Json;
+using System.Xml.Linq;
 
 namespace AltServer.Windows.Services;
 
 /// <summary>
 /// Apple 证书自动配置服务。
-/// 走 GSA/SRP 认证（与 SideStore/icloud-auth 相同流程），拿到 GsIdmsToken + adsid
-/// 后直接调用 Apple Developer Portal REST API。
+/// 使用 Xcode 原生开发者服务协议 (developerservices2.apple.com/services/QH65B2/*.action)
+/// 配合 GSA 获取的 GsIdmsToken + adsid + com.apple.gs.xcode.auth 令牌，
+/// 直接完成 Team 获取、设备注册、App ID 注册、证书申请与 Mobileprovision 下载。
 /// </summary>
 public class AppleProvisionService
 {
+    private const string XCODE_SERVICES_BASE = "https://developerservices2.apple.com/services/QH65B2";
+    private const string CLIENT_ID = "XABBG36SBA";
+    private const string PROTOCOL_VERSION = "QH65B2";
+
     private readonly string _dataDir;
     private readonly AppleGsaClient _gsa;
     private readonly HttpClient _http;
@@ -184,36 +190,46 @@ public class AppleProvisionService
                 LogService.Warning($"[Provision] 注册 Bundle ID 提示: {ex.Message}");
             }
 
-            // 4. 生成 CSR 并创建证书
-            Progress?.Invoke("创建代码签名证书...");
-            var (csrContent, privateKeyPem) = GenerateCSR();
-            var cert = await CreateCertificateAsync(csrContent);
-            result.CertificateId = cert.Id;
+            // 4. 生成 CSR 并创建证书（或复用本地有效 P12）
+            Progress?.Invoke("配置代码签名证书...");
+            string? localP12 = FindValidLocalP12(bundleId);
+            string? p12Path = null;
+            string certId = string.Empty;
 
-            // 5. 下载证书并保存 P12
-            Progress?.Invoke("下载证书...");
-            var certBytes = await DownloadCertificateAsync(cert.Id);
-            var p12Path = await SaveCertificateAsync(certBytes, privateKeyPem, bundleId);
+            try
+            {
+                var (csrPem, privateKeyPem) = GenerateCSR();
+                var (newCertId, certBytes) = await CreateCertificateAsync(csrPem);
+                certId = newCertId;
+                Progress?.Invoke("导出 P12 证书...");
+                p12Path = await SaveCertificateAsync(certBytes, privateKeyPem, bundleId);
+            }
+            catch (Exception ex) when (localP12 != null)
+            {
+                LogService.Warning($"[Provision] 创建新证书提示: {ex.Message}，复用本地已有有效证书: {Path.GetFileName(localP12)}");
+                p12Path = localP12;
+            }
+
+            if (string.IsNullOrEmpty(p12Path))
+            {
+                throw new AppleAuthException("未能创建或加载有效的代码签名证书 (.p12)");
+            }
+
+            result.CertificateId = certId;
             result.P12Path = p12Path;
 
-            // 6. 创建 provisioning profile
-            Progress?.Invoke("创建 Provisioning Profile...");
-            var deviceIds = new List<string> { registeredDeviceId };
-            var certIds = new List<string> { cert.Id };
-            var profile = await CreateProfileAsync(
-                $"{appName} Development",
-                appIdId,
-                certIds,
-                deviceIds);
-            result.ProfileId = profile.Id;
+            // 5. 生成并下载 Provisioning Profile
+            Progress?.Invoke("生成并下载 Provisioning Profile...");
+            var (profileId, profileBytes) = await DownloadTeamProfileAsync(appIdId);
+            result.ProfileId = profileId;
 
-            // 7. 下载 profile
-            Progress?.Invoke("下载配置文件...");
-            var profileBytes = await DownloadProfileAsync(profile.Id);
+            // 6. 保存 profile
+            Progress?.Invoke("保存配置文件...");
             var mpPath = SaveProfile(profileBytes, bundleId);
             result.ProvisionPath = mpPath;
 
             result.Success = true;
+            LogService.Success($"[Provision] 自动配置成功！P12={Path.GetFileName(p12Path)}, Profile={Path.GetFileName(mpPath)}");
             return result;
         }
         catch (Exception ex)
@@ -227,33 +243,31 @@ public class AppleProvisionService
         }
     }
 
-    // MARK: - 开发者门户 API（使用 GsIdmsToken 直接认证）
+    // MARK: - Xcode Developer Services API
 
     private async Task<List<DeveloperTeam>> GetTeamsAsync()
     {
-        var request = new HttpRequestMessage(HttpMethod.Get,
-            "https://developer.apple.com/services/QH65B2/idmsa/webauth/getTeams");
-        AddPortalHeaders(request);
-        var response = await _http.SendAsync(request);
-        var body = await response.Content.ReadAsStringAsync();
+        var parameters = new Dictionary<string, object>();
+        var dict = await SendXcodeRequestAsync("listTeams.action", parameters);
 
-        LogService.Info($"[Provision] getTeams 响应: {response.StatusCode}, body={Truncate(body, 200)}");
-
-        if (!response.IsSuccessStatusCode)
-            throw new AppleAuthException($"获取团队列表失败: {response.StatusCode} - {Truncate(body, 200)}");
-
-        var data = JsonSerializer.Deserialize<JsonElement>(body);
         var teams = new List<DeveloperTeam>();
-
-        if (data.TryGetProperty("teams", out var teamsArray))
+        if (dict.TryGetValue("teams", out var teamsObj) && teamsObj is List<object> teamsList)
         {
-            foreach (var team in teamsArray.EnumerateArray())
+            foreach (var item in teamsList)
             {
-                teams.Add(new DeveloperTeam
+                if (item is Dictionary<string, object> teamDict)
                 {
-                    TeamId = team.GetProperty("teamId").GetString() ?? "",
-                    TeamName = team.TryGetProperty("teamName", out var name) ? name.GetString() ?? "" : ""
-                });
+                    var teamId = teamDict.TryGetValue("teamId", out var tid) ? tid?.ToString() ?? "" : "";
+                    var teamName = teamDict.TryGetValue("name", out var tn) ? tn?.ToString() ?? "" : "";
+                    if (!string.IsNullOrEmpty(teamId))
+                    {
+                        teams.Add(new DeveloperTeam
+                        {
+                            TeamId = teamId,
+                            TeamName = string.IsNullOrEmpty(teamName) ? $"Team {teamId}" : teamName
+                        });
+                    }
+                }
             }
         }
 
@@ -265,37 +279,58 @@ public class AppleProvisionService
         return teams;
     }
 
-    private const string PORTAL_BASE_URL = "https://developer.apple.com/services-account/QH65B2/account";
-
     private async Task<string> RegisterDeviceAsync(string name, string udid)
     {
         var teamId = _teamId ?? _adsId ?? "";
-        var request = new HttpRequestMessage(HttpMethod.Post, $"{PORTAL_BASE_URL}/resources/addDevice");
-        AddPortalHeaders(request);
-        var form = new Dictionary<string, string>
+
+        // 1. 先查询设备是否已在团队设备列表中
+        try
+        {
+            var listParams = new Dictionary<string, object> { ["teamId"] = teamId };
+            var listResult = await SendXcodeRequestAsync("ios/listDevices.action", listParams);
+            if (listResult.TryGetValue("devices", out var devsObj) && devsObj is List<object> devsList)
+            {
+                foreach (var item in devsList)
+                {
+                    if (item is Dictionary<string, object> d)
+                    {
+                        var devNum = d.TryGetValue("deviceNumber", out var dn) ? dn?.ToString() : "";
+                        var devId = d.TryGetValue("deviceId", out var did) ? did?.ToString() : "";
+                        if (string.Equals(devNum, udid, StringComparison.OrdinalIgnoreCase))
+                        {
+                            LogService.Info($"[Provision] 设备已在团队中: {devId ?? udid}");
+                            return !string.IsNullOrEmpty(devId) ? devId : udid;
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Warning($"[Provision] 查询设备列表提示: {ex.Message}");
+        }
+
+        // 2. 注册设备
+        var addParams = new Dictionary<string, object>
         {
             ["teamId"] = teamId,
             ["name"] = name,
-            ["deviceNumber"] = udid,
-            ["platform"] = "ios"
+            ["deviceNumber"] = udid
         };
-        request.Content = new FormUrlEncodedContent(form);
-        var response = await _http.SendAsync(request);
-        var responseBody = await response.Content.ReadAsStringAsync();
-
-        if (!response.IsSuccessStatusCode)
-            throw new AppleAuthException($"注册设备失败: {response.StatusCode} - {Truncate(responseBody, 200)}");
 
         try
         {
-            var data = JsonSerializer.Deserialize<JsonElement>(responseBody);
-            if (data.TryGetProperty("device", out var dev))
+            var addResult = await SendXcodeRequestAsync("ios/addDevice.action", addParams);
+            if (addResult.TryGetValue("device", out var dObj) && dObj is Dictionary<string, object> devDict)
             {
-                if (dev.TryGetProperty("deviceId", out var did)) return did.GetString() ?? udid;
-                if (dev.TryGetProperty("deviceNumber", out var dn)) return dn.GetString() ?? udid;
+                if (devDict.TryGetValue("deviceId", out var did)) return did?.ToString() ?? udid;
+                if (devDict.TryGetValue("deviceNumber", out var dn)) return dn?.ToString() ?? udid;
             }
         }
-        catch { }
+        catch (Exception ex) when (ex.Message.Contains("already") || ex.Message.Contains("exists"))
+        {
+            LogService.Info($"[Provision] 设备已注册: {udid}");
+        }
 
         return udid;
     }
@@ -303,32 +338,37 @@ public class AppleProvisionService
     private async Task<string> RegisterBundleIdAsync(string bundleIdentifier, string name)
     {
         var teamId = _teamId ?? _adsId ?? "";
-        var request = new HttpRequestMessage(HttpMethod.Post, $"{PORTAL_BASE_URL}/resources/registerAppId");
-        AddPortalHeaders(request);
-        var form = new Dictionary<string, string>
+
+        // 1. 先查询是否存在已注册的 App ID
+        var existingId = await FindAppIdIdAsync(bundleIdentifier);
+        if (!string.IsNullOrEmpty(existingId))
+        {
+            LogService.Info($"[Provision] App ID 已存在: {existingId}");
+            return existingId;
+        }
+
+        // 2. 注册新 App ID
+        var addParams = new Dictionary<string, object>
         {
             ["teamId"] = teamId,
-            ["identifier"] = bundleIdentifier,
+            ["appIdName"] = name,
             ["name"] = name,
-            ["type"] = "explicit",
-            ["capabilities"] = "1"
+            ["identifier"] = bundleIdentifier
         };
-        request.Content = new FormUrlEncodedContent(form);
-        var response = await _http.SendAsync(request);
-        var responseBody = await response.Content.ReadAsStringAsync();
-
-        if (!response.IsSuccessStatusCode)
-            throw new AppleAuthException($"注册 Bundle ID 失败: {response.StatusCode} - {Truncate(responseBody, 200)}");
 
         try
         {
-            var data = JsonSerializer.Deserialize<JsonElement>(responseBody);
-            if (data.TryGetProperty("appId", out var appId))
+            var addResult = await SendXcodeRequestAsync("ios/addAppId.action", addParams);
+            if (addResult.TryGetValue("appId", out var appObj) && appObj is Dictionary<string, object> appDict)
             {
-                if (appId.TryGetProperty("appIdId", out var aid)) return aid.GetString() ?? bundleIdentifier;
+                if (appDict.TryGetValue("appIdId", out var aid)) return aid?.ToString() ?? bundleIdentifier;
             }
         }
-        catch { }
+        catch (Exception ex) when (ex.Message.Contains("already") || ex.Message.Contains("exists"))
+        {
+            var reCheckId = await FindAppIdIdAsync(bundleIdentifier);
+            if (!string.IsNullOrEmpty(reCheckId)) return reCheckId;
+        }
 
         return bundleIdentifier;
     }
@@ -337,187 +377,316 @@ public class AppleProvisionService
     {
         try
         {
-            var request = new HttpRequestMessage(HttpMethod.Post, $"{PORTAL_BASE_URL}/resources/listAppIds");
-            AddPortalHeaders(request);
-            var form = new Dictionary<string, string> { ["teamId"] = _teamId ?? _adsId ?? "" };
-            request.Content = new FormUrlEncodedContent(form);
-            var response = await _http.SendAsync(request);
-            if (!response.IsSuccessStatusCode) return null;
-            var body = await response.Content.ReadAsStringAsync();
-            var data = JsonSerializer.Deserialize<JsonElement>(body);
-            if (data.TryGetProperty("appIds", out var appIds))
+            var listParams = new Dictionary<string, object>
             {
-                foreach (var app in appIds.EnumerateArray())
+                ["teamId"] = _teamId ?? _adsId ?? ""
+            };
+            var listResult = await SendXcodeRequestAsync("ios/listAppIds.action", listParams);
+            if (listResult.TryGetValue("appIds", out var appIdsObj) && appIdsObj is List<object> appIdsList)
+            {
+                foreach (var item in appIdsList)
                 {
-                    if (app.TryGetProperty("identifier", out var ident) && ident.GetString() == bundleId)
+                    if (item is Dictionary<string, object> appDict)
                     {
-                        if (app.TryGetProperty("appIdId", out var id))
-                            return id.GetString();
+                        var ident = appDict.TryGetValue("identifier", out var idn) ? idn?.ToString() : null;
+                        if (string.Equals(ident, bundleId, StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (appDict.TryGetValue("appIdId", out var aid)) return aid?.ToString();
+                        }
                     }
                 }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            LogService.Warning($"[Provision] 查询 App ID 列表提示: {ex.Message}");
+        }
         return null;
     }
 
-    private async Task<PortalCertificate> CreateCertificateAsync(string csrContent)
+    private async Task<(string certId, byte[] certBytes)> CreateCertificateAsync(string csrPem)
     {
         var teamId = _teamId ?? _adsId ?? "";
-        var request = new HttpRequestMessage(HttpMethod.Post, $"{PORTAL_BASE_URL}/resources/addCertificate");
-        AddPortalHeaders(request);
-        var form = new Dictionary<string, string>
+        var parameters = new Dictionary<string, object>
         {
             ["teamId"] = teamId,
-            ["csrContent"] = csrContent,
-            ["certificateType"] = "IOS_DEVELOPMENT"
+            ["csrContent"] = csrPem
         };
-        request.Content = new FormUrlEncodedContent(form);
-        var response = await _http.SendAsync(request);
-        var responseBody = await response.Content.ReadAsStringAsync();
 
-        if (!response.IsSuccessStatusCode)
+        var dict = await SendXcodeRequestAsync("ios/submitDevelopmentCSR.action", parameters);
+
+        string certId = "";
+        byte[]? certBytes = null;
+
+        if (dict.TryGetValue("certRequest", out var crObj) && crObj is Dictionary<string, object> crDict)
         {
-            if (responseBody.Contains("already have") || responseBody.Contains("limit") || responseBody.Contains("revoke"))
+            if (crDict.TryGetValue("certificateId", out var cid)) certId = cid?.ToString() ?? "";
+            if (crDict.TryGetValue("certContent", out var cc))
             {
-                LogService.Warning("[Provision] 证书已存在或达到上限，尝试检索已有证书...");
-                var existingCert = await FindFirstCertificateAsync();
-                if (existingCert != null)
-                {
-                    LogService.Info($"[Provision] 找到已有证书: {existingCert.Id}");
-                    return existingCert;
-                }
-            }
-            throw new AppleAuthException($"创建证书失败: {response.StatusCode} - {Truncate(responseBody, 200)}");
-        }
-
-        var data = JsonSerializer.Deserialize<JsonElement>(responseBody);
-        var certId = data.TryGetProperty("resultId", out var rid) ? rid.GetString() ?? "" : "";
-        if (string.IsNullOrEmpty(certId))
-            certId = data.TryGetProperty("certificateId", out var cid) ? cid.GetString() ?? "" : "";
-        if (string.IsNullOrEmpty(certId))
-            certId = data.TryGetProperty("certId", out var certIdVal) ? certIdVal.GetString() ?? "" : "";
-        if (string.IsNullOrEmpty(certId) && data.TryGetProperty("certificate", out var certObj))
-        {
-            certId = certObj.TryGetProperty("certificateId", out var cid2) ? cid2.GetString() ?? "" :
-                     certObj.TryGetProperty("serialNumber", out var sn) ? sn.GetString() ?? "" : "";
-        }
-
-        if (string.IsNullOrEmpty(certId))
-            throw new AppleAuthException($"创建证书成功但无法解析证书 ID: {Truncate(responseBody, 500)}");
-
-        return new PortalCertificate { Id = certId, Name = "iOS Development" };
-    }
-
-    private async Task<PortalCertificate?> FindFirstCertificateAsync()
-    {
-        try
-        {
-            var request = new HttpRequestMessage(HttpMethod.Post, $"{PORTAL_BASE_URL}/resources/listCertificates");
-            AddPortalHeaders(request);
-            var form = new Dictionary<string, string> { ["teamId"] = _teamId ?? _adsId ?? "" };
-            request.Content = new FormUrlEncodedContent(form);
-            var response = await _http.SendAsync(request);
-            if (!response.IsSuccessStatusCode) return null;
-            var body = await response.Content.ReadAsStringAsync();
-            var data = JsonSerializer.Deserialize<JsonElement>(body);
-            if (data.TryGetProperty("certificates", out var certs))
-            {
-                foreach (var c in certs.EnumerateArray())
-                {
-                    var id = c.TryGetProperty("certificateId", out var cid) ? cid.GetString() :
-                             c.TryGetProperty("serialNumber", out var sn) ? sn.GetString() : null;
-                    if (!string.IsNullOrEmpty(id))
-                    {
-                        var name = c.TryGetProperty("displayName", out var dn) ? dn.GetString() ?? "iOS Development" : "iOS Development";
-                        return new PortalCertificate { Id = id, Name = name };
-                    }
-                }
+                certBytes = cc is byte[] b ? b : (cc is string s ? Convert.FromBase64String(s) : null);
             }
         }
-        catch { }
-        return null;
+        if (certBytes == null && dict.TryGetValue("certificate", out var cObj) && cObj is Dictionary<string, object> cDict)
+        {
+            if (string.IsNullOrEmpty(certId) && cDict.TryGetValue("certificateId", out var cid)) certId = cid?.ToString() ?? "";
+            if (cDict.TryGetValue("certContent", out var cc))
+            {
+                certBytes = cc is byte[] b ? b : (cc is string s ? Convert.FromBase64String(s) : null);
+            }
+        }
+        if (certBytes == null && dict.TryGetValue("certContent", out var directCc))
+        {
+            certBytes = directCc is byte[] b ? b : (directCc is string s ? Convert.FromBase64String(s) : null);
+        }
+
+        if (certBytes == null || certBytes.Length == 0)
+        {
+            throw new AppleAuthException("创建证书成功但未在响应中找到证书数据 (certContent)");
+        }
+
+        if (string.IsNullOrEmpty(certId))
+        {
+            certId = Guid.NewGuid().ToString();
+        }
+
+        return (certId, certBytes);
     }
 
-    private async Task<byte[]> DownloadCertificateAsync(string certificateId)
+    private async Task<(string profileId, byte[] profileBytes)> DownloadTeamProfileAsync(string appIdId)
     {
         var teamId = _teamId ?? _adsId ?? "";
-        var request = new HttpRequestMessage(HttpMethod.Get,
-            $"{PORTAL_BASE_URL}/resources/downloadCertificate?id={certificateId}&teamId={teamId}");
-        AddPortalHeaders(request);
-        var response = await _http.SendAsync(request);
-
-        if (!response.IsSuccessStatusCode)
-            throw new AppleAuthException($"下载证书失败: {response.StatusCode}");
-
-        return await response.Content.ReadAsByteArrayAsync();
-    }
-
-    private async Task<PortalProfile> CreateProfileAsync(string name, string appIdId,
-        List<string> certificateIds, List<string> deviceIds)
-    {
-        var teamId = _teamId ?? _adsId ?? "";
-        var request = new HttpRequestMessage(HttpMethod.Post,
-            $"{PORTAL_BASE_URL}/resources/generateDevelopmentProvisioningProfile");
-        AddPortalHeaders(request);
-        var form = new Dictionary<string, string>
+        var parameters = new Dictionary<string, object>
         {
             ["teamId"] = teamId,
-            ["profileName"] = name,
-            ["appIdId"] = appIdId,
-            ["certificateId"] = certificateIds.FirstOrDefault() ?? "",
-            ["deviceIds"] = string.Join(",", deviceIds)
+            ["appIdId"] = appIdId
         };
-        request.Content = new FormUrlEncodedContent(form);
-        var response = await _http.SendAsync(request);
-        var responseBody = await response.Content.ReadAsStringAsync();
 
-        if (!response.IsSuccessStatusCode)
-            throw new AppleAuthException($"创建配置文件失败: {response.StatusCode} - {Truncate(responseBody, 200)}");
+        var dict = await SendXcodeRequestAsync("ios/downloadTeamProvisioningProfile.action", parameters);
 
-        var data = JsonSerializer.Deserialize<JsonElement>(responseBody);
-        var profileId = data.TryGetProperty("resultId", out var rid) ? rid.GetString() ?? "" : "";
+        string profileId = "";
+        byte[]? profileBytes = null;
+
+        if (dict.TryGetValue("provisioningProfile", out var ppObj) && ppObj is Dictionary<string, object> ppDict)
+        {
+            if (ppDict.TryGetValue("provisioningProfileId", out var pid)) profileId = pid?.ToString() ?? "";
+            if (ppDict.TryGetValue("encodedProfile", out var ep))
+            {
+                profileBytes = ep is byte[] b ? b : (ep is string s ? Convert.FromBase64String(s) : null);
+            }
+        }
+
+        if (profileBytes == null || profileBytes.Length == 0)
+        {
+            throw new AppleAuthException("未在响应中获取到 Provisioning Profile 数据 (encodedProfile)");
+        }
+
         if (string.IsNullOrEmpty(profileId))
-            profileId = data.TryGetProperty("profileId", out var pid) ? pid.GetString() ?? "" : "";
-        if (string.IsNullOrEmpty(profileId))
-            profileId = data.TryGetProperty("id", out var id) ? id.GetString() ?? "" : "";
+        {
+            profileId = Guid.NewGuid().ToString();
+        }
 
-        return new PortalProfile { Id = profileId, Name = name };
+        return (profileId, profileBytes);
     }
 
-    private async Task<byte[]> DownloadProfileAsync(string profileId)
+    // MARK: - HTTP 请求核心封装
+
+    private async Task<Dictionary<string, object>> SendXcodeRequestAsync(string action, Dictionary<string, object> parameters)
     {
-        var teamId = _teamId ?? _adsId ?? "";
-        var request = new HttpRequestMessage(HttpMethod.Get,
-            $"{PORTAL_BASE_URL}/resources/downloadProfile?id={profileId}&teamId={teamId}");
-        AddPortalHeaders(request);
+        parameters["clientId"] = CLIENT_ID;
+        parameters["protocolVersion"] = PROTOCOL_VERSION;
+        parameters["requestId"] = Guid.NewGuid().ToString().ToUpperInvariant();
+        parameters["userLocale"] = "en_US";
+
+        var url = $"{XCODE_SERVICES_BASE}/{action}?clientId={CLIENT_ID}";
+        var plistXml = BuildPlist(parameters);
+        var request = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = new StringContent(plistXml, Encoding.UTF8, "text/x-xml-plist")
+        };
+        AddXcodeHeaders(request);
+
         var response = await _http.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        LogService.Info($"[Provision] {action} 响应: {response.StatusCode}, body: {Truncate(body, 300)}");
 
         if (!response.IsSuccessStatusCode)
-            throw new AppleAuthException($"下载配置文件失败: {response.StatusCode}");
+            throw new AppleAuthException($"开发者服务请求失败: {response.StatusCode} - {Truncate(body, 200)}");
 
-        return await response.Content.ReadAsByteArrayAsync();
+        var dict = ParsePlist(body);
+        if (dict == null)
+            throw new AppleAuthException($"无法解析开发者服务响应: {Truncate(body, 200)}");
+
+        if (dict.TryGetValue("resultCode", out var rcObj))
+        {
+            long rc = Convert.ToInt64(rcObj);
+            if (rc != 0)
+            {
+                var userString = dict.TryGetValue("userString", out var u) ? u?.ToString() : null;
+                var resultString = dict.TryGetValue("resultString", out var r) ? r?.ToString() : null;
+                var errorMsg = !string.IsNullOrEmpty(userString) ? userString :
+                               !string.IsNullOrEmpty(resultString) ? resultString : $"ResultCode {rc}";
+                throw new AppleAuthException($"开发者服务返回错误 ({rc}): {errorMsg}");
+            }
+        }
+
+        return dict;
     }
 
-    // MARK: - 内部方法
-
-    private void AddPortalHeaders(HttpRequestMessage request)
+    private void AddXcodeHeaders(HttpRequestMessage request)
     {
         var gsToken = BuildGSIdentityToken();
         if (!string.IsNullOrEmpty(gsToken))
-            request.Headers.Add("X-Apple-Identity-Token", gsToken);
+            request.Headers.TryAddWithoutValidation("X-Apple-Identity-Token", gsToken);
         if (!string.IsNullOrEmpty(_gsa.AuthToken))
-            request.Headers.Add("X-Apple-GS-Token", _gsa.AuthToken);
-        request.Headers.Add("X-Requested-With", "XMLHttpRequest");
-        request.Headers.Add("User-Agent", "Xcode");
-        request.Headers.Add("Accept", "application/json");
+            request.Headers.TryAddWithoutValidation("X-Apple-GS-Token", _gsa.AuthToken);
+
+        var anisette = _gsa.Anisette;
+        if (anisette != null)
+        {
+            if (!string.IsNullOrEmpty(anisette.ClientTime))
+                request.Headers.TryAddWithoutValidation("X-Apple-I-Client-Time", anisette.ClientTime);
+            if (!string.IsNullOrEmpty(anisette.MachineId))
+                request.Headers.TryAddWithoutValidation("X-Apple-I-MD-M", anisette.MachineId);
+            if (!string.IsNullOrEmpty(anisette.OneTimePassword))
+                request.Headers.TryAddWithoutValidation("X-Apple-I-MD", anisette.OneTimePassword);
+            if (anisette.RoutingInfo != 0)
+                request.Headers.TryAddWithoutValidation("X-Apple-I-MD-RINFO", anisette.RoutingInfo.ToString());
+            if (!string.IsNullOrEmpty(anisette.TimeZone))
+                request.Headers.TryAddWithoutValidation("X-Apple-I-TimeZone", anisette.TimeZone);
+            if (!string.IsNullOrEmpty(anisette.Locale))
+                request.Headers.TryAddWithoutValidation("X-Apple-Locale", anisette.Locale);
+        }
+
+        request.Headers.TryAddWithoutValidation("User-Agent", "Xcode");
+        request.Headers.TryAddWithoutValidation("Accept", "text/x-xml-plist");
+        request.Headers.TryAddWithoutValidation("X-Mme-Client-Info", "<MacBookPro15,1> <macOS;13.5;22G74> <com.apple.dt.Xcode/14.3.1 (14E300c)>");
     }
 
     private static string Truncate(string s, int max) => s.Length > max ? s[..max] : s;
 
-    // MARK: - CSR 生成
+    // MARK: - Plist 生成与解析
 
-    private (string csrContent, string privateKeyPem) GenerateCSR()
+    private static string BuildPlist(Dictionary<string, object> dict)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+        sb.AppendLine("<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">");
+        sb.AppendLine("<plist version=\"1.0\">");
+        WritePlistDict(sb, dict);
+        sb.AppendLine("</plist>");
+        return sb.ToString();
+    }
+
+    private static void WritePlistValue(StringBuilder sb, object value)
+    {
+        switch (value)
+        {
+            case string s:
+                sb.Append("<string>").Append(SecurityElement.Escape(s)).AppendLine("</string>");
+                break;
+            case int i:
+                sb.Append("<integer>").Append(i).AppendLine("</integer>");
+                break;
+            case long l:
+                sb.Append("<integer>").Append(l).AppendLine("</integer>");
+                break;
+            case bool b:
+                sb.AppendLine(b ? "<true/>" : "<false/>");
+                break;
+            case byte[] data:
+                sb.Append("<data>").Append(Convert.ToBase64String(data)).AppendLine("</data>");
+                break;
+            case Dictionary<string, object> dict:
+                WritePlistDict(sb, dict);
+                break;
+            case System.Collections.IEnumerable list when !(value is string):
+                sb.AppendLine("<array>");
+                foreach (var item in list)
+                {
+                    WritePlistValue(sb, item);
+                }
+                sb.AppendLine("</array>");
+                break;
+            default:
+                sb.Append("<string>").Append(SecurityElement.Escape(value.ToString() ?? "")).AppendLine("</string>");
+                break;
+        }
+    }
+
+    private static void WritePlistDict(StringBuilder sb, Dictionary<string, object> dict)
+    {
+        sb.AppendLine("<dict>");
+        foreach (var kvp in dict)
+        {
+            sb.Append("<key>").Append(kvp.Key).AppendLine("</key>");
+            WritePlistValue(sb, kvp.Value);
+        }
+        sb.AppendLine("</dict>");
+    }
+
+    private static object? ParsePlistElement(XElement elem)
+    {
+        switch (elem.Name.LocalName)
+        {
+            case "dict":
+                var dict = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+                var children = elem.Elements().ToList();
+                for (int i = 0; i < children.Count; i += 2)
+                {
+                    if (children[i].Name.LocalName == "key" && i + 1 < children.Count)
+                    {
+                        var key = children[i].Value;
+                        var val = ParsePlistElement(children[i + 1]);
+                        if (val != null) dict[key] = val;
+                    }
+                }
+                return dict;
+            case "array":
+                var list = new List<object>();
+                foreach (var child in elem.Elements())
+                {
+                    var val = ParsePlistElement(child);
+                    if (val != null) list.Add(val);
+                }
+                return list;
+            case "string":
+                return elem.Value;
+            case "integer":
+                return long.TryParse(elem.Value, out var n) ? n : 0L;
+            case "data":
+                try { return Convert.FromBase64String(elem.Value.Replace(" ", "").Replace("\r", "").Replace("\n", "")); }
+                catch { return elem.Value; }
+            case "true":
+                return true;
+            case "false":
+                return false;
+            case "date":
+                return elem.Value;
+            default:
+                return elem.Value;
+        }
+    }
+
+    private static Dictionary<string, object>? ParsePlist(string xml)
+    {
+        try
+        {
+            var doc = XDocument.Parse(xml);
+            var rootDict = doc.Root?.Element("dict");
+            if (rootDict != null)
+                return ParsePlistElement(rootDict) as Dictionary<string, object>;
+        }
+        catch (Exception ex)
+        {
+            LogService.Warning($"[Provision] 解析 plist 异常: {ex.Message}");
+        }
+        return null;
+    }
+
+    // MARK: - CSR 生成与本地证书管理
+
+    private (string csrPem, string privateKeyPem) GenerateCSR()
     {
         using var rsa = RSA.Create(2048);
         var request = new CertificateRequest(
@@ -527,24 +696,50 @@ public class AppleProvisionService
             RSASignaturePadding.Pkcs1);
 
         var csrBytes = request.CreateSigningRequest();
-        var csrPem = $"-----BEGIN CERTIFICATE REQUEST-----\n" +
+        var csrPem = "-----BEGIN CERTIFICATE REQUEST-----\n" +
                      Convert.ToBase64String(csrBytes, Base64FormattingOptions.InsertLineBreaks) +
                      "\n-----END CERTIFICATE REQUEST-----";
 
         var privateKeyPem = rsa.ExportPkcs8PrivateKeyPem();
-        return (Convert.ToBase64String(csrBytes), privateKeyPem);
+        return (csrPem, privateKeyPem);
     }
 
-    // MARK: - 保存文件
+    private string? FindValidLocalP12(string bundleId)
+    {
+        try
+        {
+            var p12Dir = Path.Combine(_dataDir, "certs");
+            if (!Directory.Exists(p12Dir)) return null;
+
+            var files = Directory.GetFiles(p12Dir, "*.p12").OrderByDescending(File.GetLastWriteTime);
+            foreach (var f in files)
+            {
+                try
+                {
+                    var cert = new X509Certificate2(f, "temp123", X509KeyStorageFlags.Exportable);
+                    if (cert.HasPrivateKey && DateTime.Now < cert.NotAfter.AddDays(-1))
+                    {
+                        LogService.Info($"[Provision] 找到本地有效证书: {Path.GetFileName(f)} (有效期至 {cert.NotAfter:yyyy-MM-dd})");
+                        return f;
+                    }
+                }
+                catch { }
+            }
+        }
+        catch { }
+        return null;
+    }
 
     private async Task<string> SaveCertificateAsync(byte[] certDer, string privateKeyPem, string bundleId)
     {
         var cert = new X509Certificate2(certDer);
         using var rsa = RSA.Create();
         rsa.ImportFromPem(privateKeyPem);
+        using var certWithKey = cert.CopyWithPrivateKey(rsa);
 
-        var pfxBytes = cert.Export(X509ContentType.Pfx, "temp123");
+        var pfxBytes = certWithKey.Export(X509ContentType.Pfx, "temp123");
         var p12Dir = Path.Combine(_dataDir, "certs");
+        Directory.CreateDirectory(p12Dir);
         var p12Path = Path.Combine(p12Dir, $"{bundleId}_{DateTime.Now:yyyyMMdd}.p12");
 
         await File.WriteAllBytesAsync(p12Path, pfxBytes);
@@ -554,6 +749,7 @@ public class AppleProvisionService
     private string SaveProfile(byte[] profileData, string bundleId)
     {
         var profilesDir = Path.Combine(_dataDir, "profiles");
+        Directory.CreateDirectory(profilesDir);
         var mpPath = Path.Combine(profilesDir, $"{bundleId}_{DateTime.Now:yyyyMMdd}.mobileprovision");
         File.WriteAllBytes(mpPath, profileData);
         return mpPath;

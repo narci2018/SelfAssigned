@@ -54,6 +54,7 @@ public class AppleGsaClient : IDisposable
     public string? GsIdmsToken { get => _gsIdmsToken.Length > 0 ? _gsIdmsToken : null; }
     public string? TeamId { get; private set; }
     public string? AuthToken { get; private set; }
+    public AnisetteData? Anisette => _anisette;
 
     private const string GS_ENDPOINT = "https://gsa.apple.com/grandslam/GsService2";
     private const string GS_USER_AGENT = "akd/1.0 CFNetwork/978.0.7 Darwin/18.7.0";

@@ -3,11 +3,13 @@
 下载AltServer Windows所需的第三方工具
 .DESCRIPTION
 下载 libimobiledevice-win32 和 zsign 到 tools 目录
-使用方法：.\download-windows-tools.ps1 [-OutputDir tools]
+使用方法：.\download-windows-tools.ps1 [-OutputDir "D:\ios\AltServer-Windows\tools"]
+不带参数时，自动将工具下载到脚本所在位置的上层目录下的 tools\ 文件夹
+（即 AltServer.exe 所在目录旁的 tools\ 子目录）
 #>
 
 param(
-    [string]$OutputDir = "tools"
+    [string]$OutputDir = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,14 +19,28 @@ Write-Host " AltServer Windows - 工具下载器" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# 创建输出目录
-if (-not (Test-Path $OutputDir)) {
-    New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+# 解析输出目录：默认为脚本上级目录下的 tools\（即 AltServer.exe 旁的 tools\）
+# 这样无论 AltServer 装在 C:\、D:\ 还是 E:\，都能正确找到工具目录
+if ([string]::IsNullOrWhiteSpace($OutputDir)) {
+    $scriptParent = Split-Path -Parent $PSScriptRoot   # scripts\ 的上层 = 项目根
+    $OutputDir = Join-Path $scriptParent "AltServer.Windows\bin\Release\net8.0-windows\win-x64\tools"
+    # 如果找到已发布的 exe 目录则优先使用，否则回退到项目目录
+    $publishedDir = Join-Path $scriptParent "publish\tools"
+    $exeDir = Split-Path -Parent (Get-Command "AltServer.exe" -ErrorAction SilentlyContinue).Source 2>$null
+    if ($exeDir -and (Test-Path (Join-Path $exeDir "AltServer.exe"))) {
+        $OutputDir = Join-Path $exeDir "tools"
+        Write-Host "检测到运行中的 AltServer.exe，工具将安装至其旁边的 tools\ 目录" -ForegroundColor Green
+    }
 }
 
-# 使用绝对路径（脚本所在目录的上级作为默认）
+# 如果仍是相对路径，以脚本所在目录的上级为基准
 if (-not [System.IO.Path]::IsPathRooted($OutputDir)) {
-    $OutputDir = Join-Path $PSScriptRoot $OutputDir
+    $OutputDir = Join-Path (Split-Path -Parent $PSScriptRoot) $OutputDir
+}
+
+# 创建输出目录（支持任意盘符）
+if (-not (Test-Path $OutputDir)) {
+    New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 }
 
 $DownloadDir = Join-Path $OutputDir "_dl_temp"

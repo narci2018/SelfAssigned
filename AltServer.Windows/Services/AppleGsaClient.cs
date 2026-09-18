@@ -531,15 +531,28 @@ public class AppleGsaClient : IDisposable
 
     private string? FindAsrpDll()
     {
-        var candidates = new[]
+        // 优先查找相对于工具目录和 exe 目录的固定位置
+        var candidates = new List<string>
         {
             Path.Combine(_toolsDir, "asrp64.dll"),
             Path.Combine(AppContext.BaseDirectory, "tools", "asrp64.dll"),
             Path.Combine(AppContext.BaseDirectory, "asrp64.dll"),
-            @"C:\Program Files\i4Tools9\asrp64.dll",
-            @"C:\Program Files\i4Tools9\iTunesdll\asrp64.dll",
-            @"C:\Program Files\i4Tools9\iCloudDll\asrp.dll",
         };
+
+        // 动态枚举所有固定驱动器，搜索 i4Tools9（可安装到任意盘符）
+        try
+        {
+            foreach (var drive in System.IO.DriveInfo.GetDrives()
+                         .Where(d => d.IsReady && d.DriveType == DriveType.Fixed))
+            {
+                var root = drive.RootDirectory.FullName;
+                candidates.Add(Path.Combine(root, "Program Files", "i4Tools9", "asrp64.dll"));
+                candidates.Add(Path.Combine(root, "Program Files", "i4Tools9", "iTunesdll", "asrp64.dll"));
+                candidates.Add(Path.Combine(root, "Program Files", "i4Tools9", "iCloudDll", "asrp.dll"));
+                candidates.Add(Path.Combine(root, "Program Files (x86)", "i4Tools9", "asrp64.dll"));
+            }
+        }
+        catch { /* 驱动器枚举失败时忽略 */ }
 
         foreach (var p in candidates)
         {

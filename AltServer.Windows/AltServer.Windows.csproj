@@ -17,6 +17,7 @@
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
+    <!-- 单文件发布：.NET 运行时内嵌，用户无需安装任何 .NET 组件 -->
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
@@ -25,18 +26,63 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Apple CoreADI.dll -> {appDir}\tools\an\ (local anisette provider, preferred).
-         Copied to the build output for local dev/testing. For the published
-         single-file app it is NOT bundled here (CopyToPublishDirectory=Never);
-         instead the release workflow / download-windows-tools.ps1 place it as a
-         separate file in tools\an\ next to the exe, where CoreADIService looks. -->
-    <Content Include="tools\an\CoreADI.dll">
+    <!--
+      tools\ 目录下的第三方工具（libimobiledevice、zsign、asrp64.dll、CoreADI.dll）
+      在发布时一并复制到输出目录的 tools\ 子目录中，无需用户手动安装。
+      
+      【开发时】：先运行 scripts\download-windows-tools.ps1 将工具下载到 tools\。
+      【发版时】：dotnet publish 会自动将 tools\ 整体打包到发布目录，
+                 用户解压即用，不依赖 C 盘或任何特定路径。
+    -->
+
+    <!-- asrp64.dll：Apple 认证辅助库（必需） -->
+    <Content Include="tools\asrp64.dll" Condition="Exists('tools\asrp64.dll')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <TargetPath>tools\asrp64.dll</TargetPath>
     </Content>
-    <Content Include="tools\asrp64.dll">
+
+    <!-- CoreADI.dll：Apple 本地 Anisette 库（必需，来自 iTunes/Apple Application Support） -->
+    <Content Include="tools\an\CoreADI.dll" Condition="Exists('tools\an\CoreADI.dll')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <TargetPath>tools\an\CoreADI.dll</TargetPath>
+    </Content>
+
+    <!-- libimobiledevice 工具：idevice_id、ideviceinfo、ideviceinstaller、idevicepair -->
+    <Content Include="tools\idevice_id.exe" Condition="Exists('tools\idevice_id.exe')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <TargetPath>tools\idevice_id.exe</TargetPath>
+    </Content>
+    <Content Include="tools\ideviceinfo.exe" Condition="Exists('tools\ideviceinfo.exe')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <TargetPath>tools\ideviceinfo.exe</TargetPath>
+    </Content>
+    <Content Include="tools\ideviceinstaller.exe" Condition="Exists('tools\ideviceinstaller.exe')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <TargetPath>tools\ideviceinstaller.exe</TargetPath>
+    </Content>
+    <Content Include="tools\idevicepair.exe" Condition="Exists('tools\idevicepair.exe')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <TargetPath>tools\idevicepair.exe</TargetPath>
+    </Content>
+
+    <!-- zsign：IPA 签名工具 -->
+    <Content Include="tools\zsign.exe" Condition="Exists('tools\zsign.exe')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <TargetPath>tools\zsign.exe</TargetPath>
+    </Content>
+
+    <!-- libimobiledevice 依赖 DLL（如 libssl、libcrypto 等），通配符批量包含 -->
+    <Content Include="tools\*.dll" Exclude="tools\asrp64.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <TargetPath>tools\%(Filename)%(Extension)</TargetPath>
     </Content>
   </ItemGroup>
 

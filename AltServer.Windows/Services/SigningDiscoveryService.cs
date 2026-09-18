@@ -147,25 +147,42 @@ public class SigningDiscoveryService
 
     private List<string> GetSearchDirectories()
     {
+        var commonAppData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
         var dirs = new List<string>
         {
             _baseDir,
             Path.Combine(_baseDir, "certs"),
+            Path.Combine(_baseDir, "profiles"),
             Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Documents"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AltServer"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AltServer"),
-            @"C:\ProgramData\i4\i4tools\ipasign",
-            @"C:\ProgramData\i4\i4tools\ipasign\cnf",
-            @"C:\ProgramData\3u\3utools\ipasign",
-            @"C:\ProgramData\3u\3utools\ipasign\cnf",
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "i4", "i4tools", "ipasign"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "i4", "i4tools", "ipasign", "cnf"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "3u", "3utools", "ipasign"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "3u", "3utools", "ipasign", "cnf"),
+            // 使用 GetFolderPath 保证跟随系统盘符，不硬编码 C:\
+            Path.Combine(commonAppData, "i4", "i4tools", "ipasign"),
+            Path.Combine(commonAppData, "i4", "i4tools", "ipasign", "cnf"),
+            Path.Combine(commonAppData, "3u", "3utools", "ipasign"),
+            Path.Combine(commonAppData, "3u", "3utools", "ipasign", "cnf"),
         };
+
+        // 扫描所有可用驱动器上的常见第三方工具路径（i4Tools、3uTools 可安装到任意盘符）
+        try
+        {
+            foreach (var drive in System.IO.DriveInfo.GetDrives()
+                         .Where(d => d.IsReady && d.DriveType == System.IO.DriveType.Fixed))
+            {
+                var root = drive.RootDirectory.FullName;
+                dirs.Add(Path.Combine(root, "ProgramData", "i4", "i4tools", "ipasign"));
+                dirs.Add(Path.Combine(root, "ProgramData", "i4", "i4tools", "ipasign", "cnf"));
+                dirs.Add(Path.Combine(root, "ProgramData", "3u", "3utools", "ipasign"));
+                dirs.Add(Path.Combine(root, "ProgramData", "3u", "3utools", "ipasign", "cnf"));
+                dirs.Add(Path.Combine(root, "Program Files", "i4Tools9"));
+                dirs.Add(Path.Combine(root, "Program Files (x86)", "i4Tools9"));
+            }
+        }
+        catch { /* 驱动器枚举失败时忽略 */ }
+
         return dirs.Distinct().ToList();
     }
 }

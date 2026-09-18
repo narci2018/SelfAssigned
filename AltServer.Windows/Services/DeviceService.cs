@@ -91,42 +91,90 @@ public class DeviceService
         RunTool("ideviceinstaller", $"-u {udid} -U {bundleId}", timeoutMs: 120_000);
     }
 
-    /// <summary>列出设备上已安装的应用</summary>
+    /// <summary>列出设备上已安装的应用（兼容新旧版 ideviceinstaller 输出格式）</summary>
     public List<InstalledApp> ListInstalledApps(string udid)
     {
         var apps = new List<InstalledApp>();
 
-        var output = RunTool("ideviceinstaller", $"-u {udid} -l", timeoutMs: 30_000);
+        string output;
+        try
+        {
+            // 新版 ideviceinstaller 支持 -o xml 输出 plist，先尝试
+            output = RunToolNoThrow("ideviceinstaller", $"-u {udid} -l", timeoutMs: 60_000);
+        }
+        catch (TimeoutException)
+        {
+            // 超时时返回空列表，不向上抛异常
+            throw;
+        }
+
+        if (string.IsNullOrWhiteSpace(output))
+            return apps;
+
         var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-        foreach (var line in lines)
-        {
-            if (line.StartsWith("CFBundleIdentifier:", StringComparison.OrdinalIgnoreCase))
-            {
-                var bundleId = line.Split(':', 2)[1].Trim();
-                var name = bundleId.Contains('.') ? bundleId.Split('.').Last() : bundleId;
+        // 检测输出格式：
+        // 旧版格式：  CFBundleIdentifier: com.xxx, CFBundleVersion: 1.0, ...
+        // 新版格式：  com.xxx, 1.0, AppName
+        bool isNewFormat = lines.Length > 0
+            && !lines[0].StartsWith("CFBundle", StringComparison.OrdinalIgnoreCase)
+            && !lines[0].StartsWith("Total:", StringComparison.OrdinalIgnoreCase)
+            && lines[0].Contains(',');
 
-                apps.Add(new InstalledApp { BundleIdentifier = bundleId, Name = name });
-            }
-            else if (line.StartsWith("CFBundleVersion:", StringComparison.OrdinalIgnoreCase))
+        if (isNewFormat)
+        {
+            // 新版 ideviceinstaller 输出：  bundleId, version, displayName
+            foreach (var line in lines)
             {
-                if (apps.Count > 0)
+                // 跳过 "Total: N apps" 这类汇总行
+                if (line.StartsWith("Total:", StringComparison.OrdinalIgnoreCase)) continue;
+
+                var parts = line.Split(',', 3);
+                if (parts.Length < 1) continue;
+
+                var bundleId = parts[0].Trim();
+                if (string.IsNullOrEmpty(bundleId)) continue;
+
+                var app = new InstalledApp { BundleIdentifier = bundleId };
+                if (parts.Length >= 2) app.Version = parts[1].Trim();
+                if (parts.Length >= 3)
                 {
-                    apps[^1].Build = line.Split(':', 2)[1].Trim();
+                    // 去掉版本号后括号：  "AppName - 1.0.0"  或  "AppName"
+                    var namePart = parts[2].Trim();
+                    // 某些版本格式: "Name - Version" 
+                    var dashIdx = namePart.LastIndexOf(" - ", StringComparison.Ordinal);
+                    app.Name = dashIdx > 0 ? namePart[..dashIdx].Trim() : namePart;
                 }
-            }
-            else if (line.StartsWith("CFBundleDisplayName:", StringComparison.OrdinalIgnoreCase))
-            {
-                if (apps.Count > 0)
+                else
                 {
-                    apps[^1].Name = line.Split(':', 2)[1].Trim();
+                    app.Name = bundleId.Contains('.') ? bundleId.Split('.').Last() : bundleId;
                 }
+
+                apps.Add(app);
             }
-            else if (line.StartsWith("CFBundleVersionShortString:", StringComparison.OrdinalIgnoreCase))
+        }
+        else
+        {
+            // 旧版 ideviceinstaller 格式：每行 Key: Value
+            foreach (var line in lines)
             {
-                if (apps.Count > 0)
+                if (line.StartsWith("CFBundleIdentifier:", StringComparison.OrdinalIgnoreCase))
                 {
-                    apps[^1].Version = line.Split(':', 2)[1].Trim();
+                    var bundleId = line.Split(':', 2)[1].Trim();
+                    var name = bundleId.Contains('.') ? bundleId.Split('.').Last() : bundleId;
+                    apps.Add(new InstalledApp { BundleIdentifier = bundleId, Name = name });
+                }
+                else if (line.StartsWith("CFBundleVersion:", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (apps.Count > 0) apps[^1].Build = line.Split(':', 2)[1].Trim();
+                }
+                else if (line.StartsWith("CFBundleDisplayName:", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (apps.Count > 0) apps[^1].Name = line.Split(':', 2)[1].Trim();
+                }
+                else if (line.StartsWith("CFBundleVersionShortString:", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (apps.Count > 0) apps[^1].Version = line.Split(':', 2)[1].Trim();
                 }
             }
         }
@@ -184,5 +232,46 @@ public class DeviceService
         }
 
         return stdout;
+    }
+
+    /// <summary>
+    /// 执行工具但允许非零退出码（如 ideviceinstaller -l 可能返回 1 但仍输出数据）。
+    /// 超时时仍抛 TimeoutException。
+    /// </summary>
+    private string RunToolNoThrow(string toolName, string arguments, int timeoutMs)
+    {
+        var toolPath = Path.Combine(_toolsDir, $"{toolName}.exe");
+
+        if (!File.Exists(toolPath))
+        {
+            throw new FileNotFoundException($"未找到工具: {toolName}.exe。请将 libimobiledevice 工具放入 {_toolsDir}", toolPath);
+        }
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = toolPath,
+            Arguments = arguments,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+
+        using var process = Process.Start(psi)
+            ?? throw new InvalidOperationException($"无法启动进程 {toolName}.exe");
+
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+
+        if (!process.WaitForExit(timeoutMs))
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            throw new TimeoutException($"工具执行超时: {toolName}");
+        }
+
+        // 不检查退出码，直接返回 stdout（兼容部分工具非零退出但有效输出的情况）
+        return stdoutTask.GetAwaiter().GetResult();
     }
 }

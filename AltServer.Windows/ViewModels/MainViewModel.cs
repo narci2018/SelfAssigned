@@ -379,7 +379,8 @@ public class MainViewModel : ObservableObject
             });
         };
 
-        VerifyTools();
+        // 注意：VerifyTools() 不在此调用，由 MainWindow.Loaded 触发
+        // 以保证 MissingToolsDetected 事件订阅已完成，弹框可正常显示
 
         try
         {
@@ -419,7 +420,11 @@ public class MainViewModel : ObservableObject
 
     // MARK: - 工具检测
 
-    public void VerifyTools()
+    /// <summary>当检测到工具缺失时触发，参数为缺失工具列表和工具目录路径</summary>
+    public event Action<string[], string>? MissingToolsDetected;
+
+    /// <summary>返回 true 表示所有工具齐全</summary>
+    public bool VerifyTools()
     {
         var toolsDir = _settings.ResolveToolsDir();
         var required = new[] { "idevice_id.exe", "ideviceinfo.exe", "ideviceinstaller.exe", "idevicepair.exe", "zsign.exe" };
@@ -428,15 +433,19 @@ public class MainViewModel : ObservableObject
 
         ToolsStatus = missing.Length == 0
             ? $"工具完整 ✓ ({Path.GetFileName(toolsDir)})"
-            : $"缺少工具: {string.Join(", ", missing.Select(Path.GetFileNameWithoutExtension))} 请放置到 {toolsDir}";
+            : $"缺少工具: {string.Join(", ", missing.Select(Path.GetFileNameWithoutExtension))}";
 
         if (missing.Length > 0)
         {
-            LogService.Warning(ToolsStatus);
+            LogService.Warning($"工具缺失，请检查目录 {toolsDir}：{string.Join(", ", missing)}");
+            // 通知 UI 层弹出提示，而非静默失败
+            MissingToolsDetected?.Invoke(missing, toolsDir);
+            return false;
         }
         else
         {
             LogService.Info($"检测到完整工具集位于 {toolsDir}");
+            return true;
         }
     }
 
@@ -580,22 +589,61 @@ public class MainViewModel : ObservableObject
 
         if (device is null) return;
 
-        // 异步加载已安装应用，避免UI卡顿
+        // 第一步：立即从本地注册表加载（不依赖 ideviceinstaller，无延迟）
+        var registryApps = _registry.GetInstalledApps(device.Udid);
+        if (registryApps.Count > 0)
+        {
+            var registryInstalled = registryApps.Select(a => new InstalledApp
+            {
+                BundleIdentifier = a.BundleId,
+                Name = a.AppName,
+                Version = string.Empty,
+                Build = string.Empty
+            }).ToList();
+
+            if (dispatcher is not null && !dispatcher.CheckAccess())
+            {
+                dispatcher.Invoke(() =>
+                {
+                    InstalledApps.Clear();
+                    foreach (var app in registryInstalled) InstalledApps.Add(app);
+                });
+            }
+            else
+            {
+                InstalledApps.Clear();
+                foreach (var app in registryInstalled) InstalledApps.Add(app);
+            }
+        }
+
+        // 第二步：异步用 ideviceinstaller 刷新（补充版本号等信息，超时不影响UI）
         Task.Run(() =>
         {
             try
             {
                 var apps = _devices.ListInstalledApps(device.Udid);
-                System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+                if (apps.Count > 0)
                 {
-                    InstalledApps.Clear();
-                    foreach (var app in apps)
-                        InstalledApps.Add(app);
-                });
+                    System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+                    {
+                        InstalledApps.Clear();
+                        foreach (var app in apps)
+                            InstalledApps.Add(app);
+                    });
+                }
+            }
+            catch (TimeoutException)
+            {
+                // ideviceinstaller 超时很常见，本地注册表已先显示，此处静默忽略
+                LogService.Warning($"获取 {device.Name} 设备应用列表超时（已显示本地已安装记录）");
             }
             catch (Exception ex)
             {
-                LogService.Error($"获取 {device.Name} 已安装应用失败: {ex.Message}");
+                // 其他错误也不覆盖已显示的注册表数据
+                if (registryApps.Count == 0)
+                {
+                    LogService.Error($"获取 {device.Name} 已安装应用失败: {ex.Message}");
+                }
             }
         });
     }
@@ -661,11 +709,14 @@ public class MainViewModel : ObservableObject
             await Task.Run(() => _devices.InstallIpa(device.Udid, signedIpa));
             LogService.Success($"安装成功: {Path.GetFileName(ipaPath)} → {device.Name}");
 
-            // 注册到已安装应用列表
+            // 注册到已安装应用列表（使用描述文件中的真实 Bundle ID）
+            var realBundleId = SigningService.ParseProvisionBundleId(_settings.Data.MobileProvisionPath)
+                               ?? System.IO.Path.GetFileNameWithoutExtension(ipaPath);
+            var appName = System.IO.Path.GetFileNameWithoutExtension(ipaPath);
             _registry.Register(
-                System.IO.Path.GetFileNameWithoutExtension(ipaPath),
+                realBundleId,
                 ipaPath,
-                System.IO.Path.GetFileNameWithoutExtension(ipaPath),
+                appName,
                 device.Udid,
                 _settings.Data.P12Path,
                 _settings.Data.MobileProvisionPath,

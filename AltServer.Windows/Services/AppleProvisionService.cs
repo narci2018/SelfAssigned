@@ -450,7 +450,7 @@ public class AppleProvisionService
                 certBytes = directCc is byte[] b ? b : (directCc is string s ? Convert.FromBase64String(s) : null);
             }
         }
-        catch (Exception ex) when (ex.Message.Contains("already have") || ex.Message.Contains("current iOS Development") || ex.Message.Contains("7252") || ex.Message.Contains("3200"))
+        catch (Exception ex) when (ex.Message.Contains("already have") || ex.Message.Contains("current iOS Development") || ex.Message.Contains("7252") || ex.Message.Contains("3200") || ex.Message.Contains("7460"))
         {
             LogService.Warning($"[Provision] 达到开发者证书上限或已有证书: {ex.Message}，尝试查询并吊销旧证书...");
             var existingCerts = await FetchCertificatesAsync(teamId);
@@ -474,6 +474,22 @@ public class AppleProvisionService
             {
                 if (crDict.TryGetValue("certificateId", out var cid)) certId = cid?.ToString() ?? "";
                 if (string.IsNullOrEmpty(certId) && crDict.TryGetValue("certRequestId", out var crid)) certId = crid?.ToString() ?? "";
+                if (crDict.TryGetValue("certContent", out var cc))
+                {
+                    certBytes = cc is byte[] b ? b : (cc is string s ? Convert.FromBase64String(s) : null);
+                }
+            }
+            if (certBytes == null && dict.TryGetValue("certificate", out var cObj) && cObj is Dictionary<string, object> cDict)
+            {
+                if (string.IsNullOrEmpty(certId) && cDict.TryGetValue("certificateId", out var cid)) certId = cid?.ToString() ?? "";
+                if (cDict.TryGetValue("certContent", out var cc))
+                {
+                    certBytes = cc is byte[] b ? b : (cc is string s ? Convert.FromBase64String(s) : null);
+                }
+            }
+            if (certBytes == null && dict.TryGetValue("certContent", out var directCc))
+            {
+                certBytes = directCc is byte[] b ? b : (directCc is string s ? Convert.FromBase64String(s) : null);
             }
         }
 
@@ -552,7 +568,7 @@ public class AppleProvisionService
         var list = new List<CertificateInfo>();
         try
         {
-            var query = $"teamId={Uri.EscapeDataString(teamId)}&filter[certificateType]=IOS_DEVELOPMENT";
+            var query = $"teamId={teamId}&filter[certificateType]=IOS_DEVELOPMENT";
             using var doc = await SendXcodeJsonRequestAsync("certificates", "GET", query);
             if (doc.RootElement.TryGetProperty("data", out var dataElem) && dataElem.ValueKind == JsonValueKind.Array)
             {
@@ -596,42 +612,119 @@ public class AppleProvisionService
         try
         {
             LogService.Info($"[Provision] 吊销旧开发者证书: {certId} (teamId: {teamId})");
-            var query = $"teamId={Uri.EscapeDataString(teamId)}";
+            var query = $"teamId={teamId}";
             using var doc = await SendXcodeJsonRequestAsync($"certificates/{certId}", "DELETE", query);
             LogService.Success($"[Provision] 证书吊销成功: {certId}");
             return true;
         }
         catch (Exception ex)
         {
-            LogService.Warning($"[Provision] 吊销证书 {certId} 失败: {ex.Message}");
-            return false;
+            LogService.Warning($"[Provision] 通过 v1 API 吊销证书 {certId} 提示: {ex.Message}，尝试 legacy 吊销接口...");
+            try
+            {
+                var p = new Dictionary<string, object>
+                {
+                    ["teamId"] = teamId,
+                    ["serialNumber"] = certId,
+                    ["certificateId"] = certId
+                };
+                await SendXcodeRequestAsync("ios/revokeDevelopmentCert.action", p);
+                LogService.Success($"[Provision] legacy action 吊销证书成功: {certId}");
+                return true;
+            }
+            catch (Exception ex2)
+            {
+                LogService.Warning($"[Provision] legacy 吊销证书亦失败: {ex2.Message}");
+                return false;
+            }
         }
     }
 
     private async Task<JsonDocument> SendXcodeJsonRequestAsync(string endpoint, string httpMethodOverride, string? queryParams = null)
     {
-        var url = $"{XCODE_SERVICES_V1_BASE}/{endpoint}";
+        // 1. URL 附加 query 参数（满足网关鉴权对 teamId 的前置路由检查）
+        var url = string.IsNullOrEmpty(queryParams)
+            ? $"{XCODE_SERVICES_V1_BASE}/{endpoint}"
+            : $"{XCODE_SERVICES_V1_BASE}/{endpoint}?{queryParams}";
+
         var request = new HttpRequestMessage(HttpMethod.Post, url);
         request.Headers.TryAddWithoutValidation("X-HTTP-Method-Override", httpMethodOverride);
+        if (!string.IsNullOrEmpty(_teamId))
+        {
+            request.Headers.TryAddWithoutValidation("X-Apple-Team-Id", _teamId);
+        }
         AddXcodeHeaders(request, accept: "application/vnd.api+json");
 
-        if (!string.IsNullOrEmpty(queryParams))
-        {
-            var jsonPayload = JsonSerializer.Serialize(new { urlEncodedQueryParams = queryParams });
-            request.Content = new StringContent(jsonPayload, Encoding.UTF8, "application/vnd.api+json");
-        }
-        else
-        {
-            request.Content = new StringContent("{}", Encoding.UTF8, "application/vnd.api+json");
-        }
+        // 2. 构造纯净 JSON（避免 JsonSerializer 将 & 转义为 \u0026 导致 Apple 网关无法识别 teamId）
+        string jsonPayload = !string.IsNullOrEmpty(queryParams)
+            ? $"{{\"urlEncodedQueryParams\":\"{queryParams}\"}}"
+            : "{}";
+
+        var content = new StringContent(jsonPayload, Encoding.UTF8);
+        // 精确设置 Content-Type 为 application/vnd.api+json，移除 charset=utf-8 后缀
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/vnd.api+json");
+        request.Content = content;
 
         var response = await _http.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
 
         LogService.Info($"[Provision] v1/{endpoint} ({httpMethodOverride}) 响应: {response.StatusCode}, body: {Truncate(body, 300)}");
 
+        // 如果 POST + Method-Override 失败，尝试原生 GET / DELETE 作为后备策略
+        if (!response.IsSuccessStatusCode && httpMethodOverride == "GET")
+        {
+            try
+            {
+                LogService.Info($"[Provision] 尝试原生 GET 请求作为后备: {url}");
+                var getReq = new HttpRequestMessage(HttpMethod.Get, url);
+                if (!string.IsNullOrEmpty(_teamId))
+                    getReq.Headers.TryAddWithoutValidation("X-Apple-Team-Id", _teamId);
+                AddXcodeHeaders(getReq, accept: "application/vnd.api+json");
+                var getResp = await _http.SendAsync(getReq);
+                var getBody = await getResp.Content.ReadAsStringAsync();
+                LogService.Info($"[Provision] 原生 GET 响应: {getResp.StatusCode}, body: {Truncate(getBody, 300)}");
+                if (getResp.IsSuccessStatusCode)
+                {
+                    response = getResp;
+                    body = getBody;
+                }
+            }
+            catch (Exception ex)
+            {
+                LogService.Warning($"[Provision] 原生 GET 后备请求失败: {ex.Message}");
+            }
+        }
+        else if (!response.IsSuccessStatusCode && httpMethodOverride == "DELETE")
+        {
+            try
+            {
+                LogService.Info($"[Provision] 尝试原生 DELETE 请求作为后备: {url}");
+                var delReq = new HttpRequestMessage(HttpMethod.Delete, url);
+                if (!string.IsNullOrEmpty(_teamId))
+                    delReq.Headers.TryAddWithoutValidation("X-Apple-Team-Id", _teamId);
+                AddXcodeHeaders(delReq, accept: "application/vnd.api+json");
+                var delResp = await _http.SendAsync(delReq);
+                var delBody = await delResp.Content.ReadAsStringAsync();
+                LogService.Info($"[Provision] 原生 DELETE 响应: {delResp.StatusCode}, body: {Truncate(delBody, 300)}");
+                if (delResp.IsSuccessStatusCode)
+                {
+                    response = delResp;
+                    body = delBody;
+                }
+            }
+            catch (Exception ex)
+            {
+                LogService.Warning($"[Provision] 原生 DELETE 后备请求失败: {ex.Message}");
+            }
+        }
+
         if (!response.IsSuccessStatusCode)
             throw new AppleAuthException($"开发者 v1 API 请求失败: {response.StatusCode} - {Truncate(body, 200)}");
+
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return JsonDocument.Parse("{}");
+        }
 
         return JsonDocument.Parse(body);
     }

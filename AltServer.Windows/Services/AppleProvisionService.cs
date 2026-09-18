@@ -106,13 +106,6 @@ public class AppleProvisionService
         _gsIdmsToken = gsIdmsToken;
     }
 
-    private string BuildGSIdentityToken()
-    {
-        if (string.IsNullOrEmpty(_adsId) || string.IsNullOrEmpty(_gsIdmsToken))
-            return string.Empty;
-        return Convert.ToBase64String(Encoding.UTF8.GetBytes($"{_adsId}:{_gsIdmsToken}"));
-    }
-
     // MARK: - 一键配置
 
     public async Task<ProvisionResult> AutoProvisionAsync(
@@ -410,7 +403,8 @@ public class AppleProvisionService
         var parameters = new Dictionary<string, object>
         {
             ["teamId"] = teamId,
-            ["csrContent"] = csrPem
+            ["csrContent"] = csrPem,
+            ["machineName"] = Environment.MachineName
         };
 
         var dict = await SendXcodeRequestAsync("ios/submitDevelopmentCSR.action", parameters);
@@ -492,11 +486,6 @@ public class AppleProvisionService
 
     private async Task<Dictionary<string, object>> SendXcodeRequestAsync(string action, Dictionary<string, object> parameters)
     {
-        parameters["clientId"] = CLIENT_ID;
-        parameters["protocolVersion"] = PROTOCOL_VERSION;
-        parameters["requestId"] = Guid.NewGuid().ToString().ToUpperInvariant();
-        parameters["userLocale"] = "en_US";
-
         var url = $"{XCODE_SERVICES_BASE}/{action}?clientId={CLIENT_ID}";
         var plistXml = BuildPlist(parameters);
         var request = new HttpRequestMessage(HttpMethod.Post, url)
@@ -535,12 +524,24 @@ public class AppleProvisionService
 
     private void AddXcodeHeaders(HttpRequestMessage request)
     {
-        var gsToken = BuildGSIdentityToken();
-        if (!string.IsNullOrEmpty(gsToken))
-            request.Headers.TryAddWithoutValidation("X-Apple-Identity-Token", gsToken);
-        if (!string.IsNullOrEmpty(_gsa.AuthToken))
-            request.Headers.TryAddWithoutValidation("X-Apple-GS-Token", _gsa.AuthToken);
+        // 1. Xcode 原生客户端基础头 (依据 i4Tools libacmr / Xcode 原生通信协议)
+        request.Headers.TryAddWithoutValidation("User-Agent", "Xcode");
+        request.Headers.TryAddWithoutValidation("Accept", "text/x-xml-plist");
+        request.Headers.TryAddWithoutValidation("Accept-Language", "en-us");
+        request.Headers.TryAddWithoutValidation("X-Apple-App-Info", "com.apple.gs.xcode.auth");
+        request.Headers.TryAddWithoutValidation("X-Xcode-Version", "11.2 (11B41)");
 
+        // 2. 身份标识：Apple 要求使用 X-Apple-I-Identity-Id 传递 DSID (adsid)
+        var adsId = !string.IsNullOrEmpty(_adsId) ? _adsId : (_gsa.AdsId ?? string.Empty);
+        if (!string.IsNullOrEmpty(adsId))
+            request.Headers.TryAddWithoutValidation("X-Apple-I-Identity-Id", adsId);
+
+        // 3. Grandslam Xcode Token
+        var authToken = !string.IsNullOrEmpty(_gsa.AuthToken) ? _gsa.AuthToken : null;
+        if (!string.IsNullOrEmpty(authToken))
+            request.Headers.TryAddWithoutValidation("X-Apple-GS-Token", authToken);
+
+        // 4. Anisette 硬件/环境特征头
         var anisette = _gsa.Anisette;
         if (anisette != null)
         {
@@ -556,11 +557,18 @@ public class AppleProvisionService
                 request.Headers.TryAddWithoutValidation("X-Apple-I-TimeZone", anisette.TimeZone);
             if (!string.IsNullOrEmpty(anisette.Locale))
                 request.Headers.TryAddWithoutValidation("X-Apple-Locale", anisette.Locale);
-        }
 
-        request.Headers.TryAddWithoutValidation("User-Agent", "Xcode");
-        request.Headers.TryAddWithoutValidation("Accept", "text/x-xml-plist");
-        request.Headers.TryAddWithoutValidation("X-Mme-Client-Info", "<MacBookPro15,1> <macOS;13.5;22G74> <com.apple.dt.Xcode/14.3.1 (14E300c)>");
+            var devId = !string.IsNullOrEmpty(anisette.DeviceUniqueId) ? anisette.DeviceUniqueId : Guid.NewGuid().ToString("D").ToUpper();
+            request.Headers.TryAddWithoutValidation("X-Mme-Device-Id", devId);
+
+            var clientInfo = !string.IsNullOrEmpty(anisette.ClientInfo) ? anisette.ClientInfo : AnisetteData.DefaultClientInfo;
+            request.Headers.TryAddWithoutValidation("X-Mme-Client-Info", clientInfo);
+        }
+        else
+        {
+            request.Headers.TryAddWithoutValidation("X-Mme-Device-Id", Guid.NewGuid().ToString("D").ToUpper());
+            request.Headers.TryAddWithoutValidation("X-Mme-Client-Info", AnisetteData.DefaultClientInfo);
+        }
     }
 
     private static string Truncate(string s, int max) => s.Length > max ? s[..max] : s;
@@ -616,6 +624,11 @@ public class AppleProvisionService
 
     private static void WritePlistDict(StringBuilder sb, Dictionary<string, object> dict)
     {
+        if (dict == null || dict.Count == 0)
+        {
+            sb.AppendLine("<dict/>");
+            return;
+        }
         sb.AppendLine("<dict>");
         foreach (var kvp in dict)
         {

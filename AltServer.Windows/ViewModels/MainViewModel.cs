@@ -41,7 +41,9 @@ public class MainViewModel : ObservableObject
         _devices = new DeviceService(_settings.ResolveToolsDir());
         _signing = new SigningService(_settings.ResolveToolsDir());
         _discovery = new SigningDiscoveryService();
-        _registry = new InstalledAppRegistry(AppContext.BaseDirectory);
+        var appDataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AltServer");
+        Directory.CreateDirectory(appDataDir);
+        _registry = new InstalledAppRegistry(appDataDir);
 
         Devices = new ObservableCollection<Device>();
         InstalledApps = new ObservableCollection<InstalledApp>();

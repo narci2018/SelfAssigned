@@ -38,6 +38,11 @@ public partial class MainWindow : Window
 
         dialog.ShowDialog();
 
+        if (dialog.ResultAppleId is not null)
+        {
+            ViewModel.AppleId = dialog.ResultAppleId;
+        }
+
         if (dialog.ResultP12Path is not null)
         {
             ViewModel.P12Path = dialog.ResultP12Path;

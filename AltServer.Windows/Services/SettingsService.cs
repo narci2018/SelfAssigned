@@ -41,10 +41,18 @@ public class SettingsService
 
     public SettingsService()
     {
-        _settingsDir = AppContext.BaseDirectory;
+        var appDataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AltServer");
+        Directory.CreateDirectory(appDataDir);
+        _settingsDir = appDataDir;
         _settingsPath = Path.Combine(_settingsDir, "settings.json");
 
-        Directory.CreateDirectory(_settingsDir);
+        // 若旧 BaseDirectory 存在 settings.json 且 AppData 下不存在，自动迁移
+        var legacyPath = Path.Combine(AppContext.BaseDirectory, "settings.json");
+        if (!File.Exists(_settingsPath) && File.Exists(legacyPath))
+        {
+            try { File.Copy(legacyPath, _settingsPath, overwrite: true); } catch { }
+        }
+
         Data = Load();
     }
 

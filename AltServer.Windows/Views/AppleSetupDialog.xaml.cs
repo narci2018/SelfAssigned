@@ -16,6 +16,7 @@ public partial class AppleSetupDialog : Window
     public string? ResultP12Path { get; private set; }
     public string? ResultProvisionPath { get; private set; }
     public string? ResultP12Password { get; private set; }
+    public string? ResultAppleId { get; private set; }
 
     public AppleSetupDialog(string dataDir)
     {
@@ -213,6 +214,7 @@ public partial class AppleSetupDialog : Window
                     ResultP12Path = provResult.P12Path;
                     ResultProvisionPath = provResult.ProvisionPath;
                     ResultP12Password = "temp123";
+                    ResultAppleId = _appleId;
 
                     settings.Data.AppleId = _appleId;
                     settings.Data.AnisetteUrl = AnisetteUrlBox.Text.Trim();
@@ -268,6 +270,7 @@ public partial class AppleSetupDialog : Window
             ResultP12Path = null;
             ResultProvisionPath = null;
             ResultP12Password = null;
+            ResultAppleId = null;
         }
     }
 }

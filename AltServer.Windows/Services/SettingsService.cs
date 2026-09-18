@@ -63,6 +63,11 @@ public class SettingsService
         }
     }
 
+    public void Reload()
+    {
+        Data = Load();
+    }
+
     public void Save()
     {
         try

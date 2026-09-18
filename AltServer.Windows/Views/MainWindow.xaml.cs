@@ -21,19 +21,15 @@ public partial class MainWindow : Window
         // 首次启动弹出配置向导
         Loaded += (_, _) =>
         {
-            var settings = new SettingsService();
-            if (!settings.Data.SetupCompleted && string.IsNullOrEmpty(settings.Data.P12Path))
+            ViewModel.ScanSigningConfig();
+            if (string.IsNullOrEmpty(ViewModel.P12Path) || !System.IO.File.Exists(ViewModel.P12Path))
             {
-                ShowSetupWizard(settings);
-            }
-            else
-            {
-                ViewModel.ScanSigningConfig();
+                ShowSetupWizard();
             }
         };
     }
 
-    private void ShowSetupWizard(SettingsService settings)
+    private void ShowSetupWizard()
     {
         var dialog = new AppleSetupDialog(AppContext.BaseDirectory)
         {
@@ -44,17 +40,14 @@ public partial class MainWindow : Window
 
         if (dialog.ResultP12Path is not null)
         {
-            settings.Data.P12Path = dialog.ResultP12Path;
-            settings.Data.P12Password = dialog.ResultP12Password ?? "";
+            ViewModel.P12Path = dialog.ResultP12Path;
+            ViewModel.P12Password = dialog.ResultP12Password ?? "temp123";
         }
 
         if (dialog.ResultProvisionPath is not null)
         {
-            settings.Data.MobileProvisionPath = dialog.ResultProvisionPath;
+            ViewModel.MobileProvisionPath = dialog.ResultProvisionPath;
         }
-
-        settings.Data.SetupCompleted = true;
-        settings.Save();
 
         ViewModel.ScanSigningConfig();
     }
@@ -140,8 +133,7 @@ public partial class MainWindow : Window
 
     private void OnOpenAppleLogin(object sender, RoutedEventArgs e)
     {
-        var settings = new SettingsService();
-        ShowSetupWizard(settings);
+        ShowSetupWizard();
     }
 
     private async void OnInstallIpa(object sender, RoutedEventArgs e)

@@ -287,34 +287,60 @@ public class MainViewModel : ObservableObject
             });
         }
 
+        _settings.Reload();
         LogService.Info($"扫描完成: 找到 {AvailableCertificates.Count} 个证书, {AvailableProvisions.Count} 个配置文件");
 
-        // 自动选中：如果只有一个且当前为空，自动填入
-        if (AvailableCertificates.Count == 1 && string.IsNullOrEmpty(P12Path))
+        // 1. 证书自动选取：优先保留已配置且有效的文件；若未配置或失效，则自动选取最新有效证书
+        CertificateItem? matchedCert = null;
+        if (!string.IsNullOrEmpty(P12Path) && File.Exists(P12Path))
         {
-            SelectedCertificate = AvailableCertificates[0];
-            LogService.Info($"自动选中证书: {AvailableCertificates[0].DisplayName}");
-        }
-
-        if (AvailableProvisions.Count == 1 && string.IsNullOrEmpty(MobileProvisionPath))
-        {
-            SelectedProvision = AvailableProvisions[0];
-            LogService.Info($"自动选中配置文件: {AvailableProvisions[0].DisplayName}");
-        }
-
-        // 如果有已保存的路径，尝试匹配选中
-        if (!string.IsNullOrEmpty(P12Path))
-        {
-            var match = AvailableCertificates.FirstOrDefault(c =>
+            matchedCert = AvailableCertificates.FirstOrDefault(c =>
                 c.Path == P12Path || c.Thumbprint == P12Path);
-            if (match is not null) SelectedCertificate = match;
         }
 
-        if (!string.IsNullOrEmpty(MobileProvisionPath))
+        if (matchedCert is not null)
         {
-            var match = AvailableProvisions.FirstOrDefault(p => p.Path == MobileProvisionPath);
-            if (match is not null) SelectedProvision = match;
+            SelectedCertificate = matchedCert;
+        }
+        else if (AvailableCertificates.Count > 0)
+        {
+            var bestCert = AvailableCertificates
+                .OrderByDescending(c => c.NotAfter)
+                .ThenByDescending(c => File.Exists(c.Path) ? File.GetLastWriteTime(c.Path) : DateTime.MinValue)
+                .FirstOrDefault();
+            if (bestCert is not null)
+            {
+                SelectedCertificate = bestCert;
+                LogService.Info($"自动配置代码签名证书: {bestCert.DisplayName}");
+            }
+        }
 
+        // 2. 描述文件自动选取：优先保留已配置且有效的文件；若未配置或失效，则自动选取最新文件
+        ProvisionItem? matchedProv = null;
+        if (!string.IsNullOrEmpty(MobileProvisionPath) && File.Exists(MobileProvisionPath))
+        {
+            matchedProv = AvailableProvisions.FirstOrDefault(p => p.Path == MobileProvisionPath);
+        }
+
+        if (matchedProv is not null)
+        {
+            SelectedProvision = matchedProv;
+        }
+        else if (AvailableProvisions.Count > 0)
+        {
+            var bestProv = AvailableProvisions
+                .OrderByDescending(p => p.Expiry)
+                .ThenByDescending(p => File.Exists(p.Path) ? File.GetLastWriteTime(p.Path) : DateTime.MinValue)
+                .FirstOrDefault();
+            if (bestProv is not null)
+            {
+                SelectedProvision = bestProv;
+                LogService.Info($"自动配置描述文件: {bestProv.DisplayName}");
+            }
+        }
+
+        if (!string.IsNullOrEmpty(MobileProvisionPath) && File.Exists(MobileProvisionPath))
+        {
             var expiry = SigningService.ParseProvisionExpiry(MobileProvisionPath);
             if (expiry is not null)
             {
@@ -589,9 +615,16 @@ public class MainViewModel : ObservableObject
             return false;
         }
 
-        if (string.IsNullOrEmpty(_settings.Data.P12Path) || string.IsNullOrEmpty(_settings.Data.MobileProvisionPath))
+        if (string.IsNullOrEmpty(_settings.Data.P12Path) || !File.Exists(_settings.Data.P12Path) ||
+            string.IsNullOrEmpty(_settings.Data.MobileProvisionPath) || !File.Exists(_settings.Data.MobileProvisionPath))
         {
-            LogService.Error("请在“签名配置”中设置 .p12 证书和 .mobileprovision 配置文件");
+            ScanSigningConfig();
+        }
+
+        if (string.IsNullOrEmpty(_settings.Data.P12Path) || !File.Exists(_settings.Data.P12Path) ||
+            string.IsNullOrEmpty(_settings.Data.MobileProvisionPath) || !File.Exists(_settings.Data.MobileProvisionPath))
+        {
+            LogService.Error("未检测到有效的签名证书或描述文件，请点击“登录 / 切换账号”自动配置");
             return false;
         }
 

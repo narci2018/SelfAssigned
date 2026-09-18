@@ -18,12 +18,13 @@ public partial class MainWindow : Window
         InitializeComponent();
         InitializeTrayIcon();
 
-        // 订阅工具缺失事件：工具不全时弹出明确提示，不静默失败
-        ViewModel.MissingToolsDetected += OnMissingTools;
-
-        // 首次启动弹出配置向导
+        // 注意：DataContext 由 App.xaml.cs 在构造函数返回后才赋值，
+        // 所以 ViewModel 相关操作必须放在 Loaded 事件里（此时 DataContext 已就绪）
         Loaded += (_, _) =>
         {
+            // 订阅工具缺失事件：工具不全时弹出明确提示，不静默失败
+            ViewModel.MissingToolsDetected += OnMissingTools;
+
             // 先检测工具完整性（工具缺失时会弹框提示）
             ViewModel.VerifyTools();
 

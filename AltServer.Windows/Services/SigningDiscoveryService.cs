@@ -72,7 +72,8 @@ public class SigningDiscoveryService
                 {
                     try
                     {
-                        var cert = new X509Certificate2(file, "", X509KeyStorageFlags.EphemeralKeySet);
+                        var pw = SigningService.ResolveP12Password(file, "");
+                        var cert = new X509Certificate2(file, pw, X509KeyStorageFlags.EphemeralKeySet);
                         if (cert.HasPrivateKey && cert.NotAfter > DateTime.Now)
                         {
                             results.Add(new CertificateInfo(
@@ -80,18 +81,18 @@ public class SigningDiscoveryService
                                 cert.Thumbprint,
                                 cert.NotAfter,
                                 file));
+                            continue;
                         }
                     }
-                    catch
-                    {
-                        // 有密码保护或格式错误
-                        var name = Path.GetFileNameWithoutExtension(file);
-                        results.Add(new CertificateInfo(
-                            name,
-                            file,
-                            DateTime.MaxValue,
-                            file));
-                    }
+                    catch { }
+
+                    // 有密码保护或格式错误
+                    var name = Path.GetFileNameWithoutExtension(file);
+                    results.Add(new CertificateInfo(
+                        name,
+                        file,
+                        DateTime.MaxValue,
+                        file));
                 }
             }
             catch { }

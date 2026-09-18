@@ -43,12 +43,26 @@ public class SigningService
 
         var sb = new StringBuilder();
 
+        // 自动检测并匹配描述文件中的 Bundle ID（如果未显式指定且非通配符）
+        if (string.IsNullOrEmpty(options.BundleId) && !string.IsNullOrEmpty(options.MobileProvisionPath))
+        {
+            var detectedBundleId = ParseProvisionBundleId(options.MobileProvisionPath);
+            if (!string.IsNullOrEmpty(detectedBundleId))
+            {
+                options.BundleId = detectedBundleId;
+                LogService.Info($"[Sign] 检测到描述文件绑定 Bundle ID: {detectedBundleId}，自动应用 -b 参数");
+            }
+        }
+
         if (!string.IsNullOrEmpty(options.P12Path))
         {
             if (!File.Exists(options.P12Path)) throw new FileNotFoundException("找不到证书文件 (.p12)", options.P12Path);
+            
+            // 自动解析 P12 密码（尝试 hint 密码、temp123、空密码等）
+            var resolvedPassword = ResolveP12Password(options.P12Path, options.P12Password);
             sb.Append($"-k \"{options.P12Path}\"");
-            if (!string.IsNullOrEmpty(options.P12Password))
-                sb.Append($" -p \"{options.P12Password}\"");
+            if (!string.IsNullOrEmpty(resolvedPassword))
+                sb.Append($" -p \"{resolvedPassword}\"");
         }
         else
         {
@@ -73,7 +87,12 @@ public class SigningService
         if (!string.IsNullOrEmpty(options.EntitlementsPath) && File.Exists(options.EntitlementsPath))
             sb.Append($" -e \"{options.EntitlementsPath}\"");
 
+        // 默认快速压缩级别 (1)
+        sb.Append(" -z 1");
+
         var arguments = $" -o \"{outputIpa}\" {sb} \"{inputIpa}\"";
+        var maskedArgs = System.Text.RegularExpressions.Regex.Replace(arguments, @"-p\s+""[^""]+""", "-p \"******\"");
+        LogService.Info($"[Sign] 执行: zsign {maskedArgs.Trim()}");
 
         return await Task.Run(() =>
         {
@@ -89,31 +108,133 @@ public class SigningService
                 StandardErrorEncoding = Encoding.UTF8
             };
 
-            using var process = Process.Start(psi)
-                ?? throw new InvalidOperationException("无法启动 zsign.exe");
+            using var process = new Process { StartInfo = psi };
+            var outputLines = new List<string>();
+            var errorLines = new List<string>();
 
-            var stdout = process.StandardOutput.ReadToEndAsync();
-            var stderr = process.StandardError.ReadToEndAsync();
+            process.OutputDataReceived += (_, e) =>
+            {
+                if (e.Data != null)
+                {
+                    outputLines.Add(e.Data);
+                    var line = e.Data.Trim();
+                    if (line.StartsWith(">>> Error") || line.StartsWith(">>> Can't") || line.Contains("error:"))
+                        LogService.Error($"[zsign] {line}");
+                    else if (line.StartsWith(">>> Warn"))
+                        LogService.Warning($"[zsign] {line}");
+                    else if (line.StartsWith(">>>"))
+                        LogService.Info($"[zsign] {line}");
+                }
+            };
+
+            process.ErrorDataReceived += (_, e) =>
+            {
+                if (e.Data != null)
+                {
+                    errorLines.Add(e.Data);
+                    LogService.Error($"[zsign-err] {e.Data.Trim()}");
+                }
+            };
+
+            if (!process.Start())
+            {
+                throw new InvalidOperationException("无法启动 zsign.exe");
+            }
+
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
 
             process.WaitForExit();
 
-            var outText = stdout.Result;
-            var errText = stderr.Result;
+            var outText = string.Join("\n", outputLines);
+            var errText = string.Join("\n", errorLines);
+            var combinedOutput = string.IsNullOrWhiteSpace(errText)
+                ? outText
+                : $"{outText}\n{errText}";
+
+            LastSigningOutput = combinedOutput;
 
             if (process.ExitCode != 0)
             {
-                throw new InvalidOperationException($"zsign 签名失败 (退出码 {process.ExitCode}):\n{errText}");
+                throw new InvalidOperationException($"zsign 签名失败 (退出码 {process.ExitCode}):\n{combinedOutput.Trim()}");
             }
 
             if (!File.Exists(outputIpa))
             {
-                throw new InvalidOperationException("zsign 未生成输出文件");
+                throw new InvalidOperationException($"zsign 未生成输出文件: {outputIpa}");
             }
 
-            // 附带 zsign 输出信息供UI显示
-            LastSigningOutput = outText;
             return outputIpa;
         }, ct);
+    }
+
+    /// <summary>自动测试并解析 P12 文件的有效密码</summary>
+    public static string ResolveP12Password(string p12Path, string? hintPassword = null)
+    {
+        if (!File.Exists(p12Path)) return hintPassword ?? "";
+
+        var candidates = new List<string>();
+        if (!string.IsNullOrEmpty(hintPassword)) candidates.Add(hintPassword);
+        candidates.Add("temp123");
+        candidates.Add("");
+        candidates.Add("123456");
+
+        foreach (var cand in candidates.Distinct())
+        {
+            try
+            {
+                using var cert = new System.Security.Cryptography.X509Certificates.X509Certificate2(
+                    p12Path, cand, System.Security.Cryptography.X509Certificates.X509KeyStorageFlags.EphemeralKeySet);
+                if (cert.HasPrivateKey)
+                {
+                    return cand;
+                }
+            }
+            catch { }
+        }
+
+        return hintPassword ?? "";
+    }
+
+    /// <summary>解析.mobileprovision文件中的application-identifier并提取Bundle ID</summary>
+    public static string? ParseProvisionBundleId(string mobileProvisionPath)
+    {
+        if (!File.Exists(mobileProvisionPath)) return null;
+
+        try
+        {
+            var bytes = File.ReadAllBytes(mobileProvisionPath);
+            var text = Encoding.UTF8.GetString(bytes);
+
+            const string marker = "<key>application-identifier</key>";
+            var idx = text.IndexOf(marker, StringComparison.Ordinal);
+            if (idx < 0) return null;
+
+            var strStart = text.IndexOf("<string>", idx + marker.Length, StringComparison.Ordinal);
+            if (strStart < 0) return null;
+            strStart += "<string>".Length;
+
+            var strEnd = text.IndexOf("</string>", strStart, StringComparison.Ordinal);
+            if (strEnd < 0) return null;
+
+            var appId = text[strStart..strEnd].Trim();
+            if (appId.EndsWith(".*"))
+            {
+                return null;
+            }
+
+            var dotIdx = appId.IndexOf('.');
+            if (dotIdx >= 0 && dotIdx + 1 < appId.Length)
+            {
+                return appId[(dotIdx + 1)..];
+            }
+
+            return appId;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>解析.mobileprovision文件中的过期时间</summary>

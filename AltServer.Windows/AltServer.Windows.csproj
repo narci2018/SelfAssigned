@@ -10,9 +10,9 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <RootNamespace>AltServer.Windows</RootNamespace>
     <AssemblyName>AltServer</AssemblyName>
-    <Version>1.0.76</Version>
-    <AssemblyVersion>1.0.76.0</AssemblyVersion>
-    <FileVersion>1.0.76.0</FileVersion>
+    <Version>1.0.77</Version>
+    <AssemblyVersion>1.0.77.0</AssemblyVersion>
+    <FileVersion>1.0.77.0</FileVersion>
     <Platforms>AnyCPU;x64;x86</Platforms>
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

@@ -1024,7 +1024,8 @@ public class AppleProvisionService
             {
                 try
                 {
-                    var cert = new X509Certificate2(f, "temp123", X509KeyStorageFlags.Exportable);
+                    var pw = SigningService.ResolveP12Password(f, "temp123");
+                    var cert = new X509Certificate2(f, pw, X509KeyStorageFlags.Exportable);
                     if (cert.HasPrivateKey && DateTime.Now < cert.NotAfter.AddDays(-1))
                     {
                         LogService.Info($"[Provision] 找到本地有效证书: {Path.GetFileName(f)} (有效期至 {cert.NotAfter:yyyy-MM-dd})");

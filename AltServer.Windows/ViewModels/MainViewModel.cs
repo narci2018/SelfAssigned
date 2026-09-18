@@ -605,10 +605,17 @@ public class MainViewModel : ObservableObject
 
             LogService.Info($"开始签名: {Path.GetFileName(ipaPath)}");
 
+            var p12Password = SigningService.ResolveP12Password(_settings.Data.P12Path, _settings.Data.P12Password);
+            if (!string.IsNullOrEmpty(p12Password) && _settings.Data.P12Password != p12Password)
+            {
+                _settings.Data.P12Password = p12Password;
+                _settings.Save();
+            }
+
             var options = new SigningService.SigningOptions
             {
                 P12Path = _settings.Data.P12Path,
-                P12Password = _settings.Data.P12Password,
+                P12Password = p12Password,
                 MobileProvisionPath = _settings.Data.MobileProvisionPath
             };
 
@@ -627,7 +634,7 @@ public class MainViewModel : ObservableObject
                 device.Udid,
                 _settings.Data.P12Path,
                 _settings.Data.MobileProvisionPath,
-                _settings.Data.P12Password);
+                p12Password);
 
             LoadDeviceApp();
             return true;
@@ -688,10 +695,12 @@ public class MainViewModel : ObservableObject
                             Path.GetTempPath(), "AltServer",
                             $"{app.BundleId}_refreshed_{DateTime.Now:yyyyMMdd_HHmmss}.ipa");
 
+                        var p12Path = app.P12Path ?? _settings.Data.P12Path;
+                        var p12Password = SigningService.ResolveP12Password(p12Path, app.P12Password ?? _settings.Data.P12Password);
                         var options = new SigningService.SigningOptions
                         {
-                            P12Path = app.P12Path ?? _settings.Data.P12Path,
-                            P12Password = app.P12Password ?? _settings.Data.P12Password,
+                            P12Path = p12Path,
+                            P12Password = p12Password,
                             MobileProvisionPath = app.ProvisionPath ?? _settings.Data.MobileProvisionPath
                         };
 

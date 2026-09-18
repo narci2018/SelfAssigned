@@ -133,6 +133,20 @@ public class MainViewModel : ObservableObject
         private set => SetField(ref _osVersion, value);
     }
 
+    public string AppleId
+    {
+        get => _settings.Data.AppleId;
+        set
+        {
+            _settings.Data.AppleId = value;
+            _settings.Save();
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(AppleIdDisplay));
+        }
+    }
+
+    public string AppleIdDisplay => string.IsNullOrEmpty(_settings.Data.AppleId) ? "未登录 Apple ID (点击右上角登录)" : _settings.Data.AppleId;
+
     public string P12Path
     {
         get => _settings.Data.P12Path;
@@ -300,7 +314,23 @@ public class MainViewModel : ObservableObject
         {
             var match = AvailableProvisions.FirstOrDefault(p => p.Path == MobileProvisionPath);
             if (match is not null) SelectedProvision = match;
+
+            var expiry = SigningService.ParseProvisionExpiry(MobileProvisionPath);
+            if (expiry is not null)
+            {
+                ProvisionExpiryText = $"有效期至: {expiry:yyyy-MM-dd HH:mm} (剩余 {Math.Max(0, (int)(expiry.Value - DateTime.Now).TotalDays)} 天)";
+            }
+            else
+            {
+                ProvisionExpiryText = "已配置签名文件";
+            }
         }
+        else
+        {
+            ProvisionExpiryText = "未配置证书与描述文件";
+        }
+
+        OnPropertyChanged(nameof(AppleIdDisplay));
     }
 
     // MARK: - 生命周期

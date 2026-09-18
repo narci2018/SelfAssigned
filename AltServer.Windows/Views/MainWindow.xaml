@@ -218,64 +218,31 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
-                <!-- 签名配置 -->
+                <!-- Apple ID 签名管理 (对齐爱思助手) -->
                 <Border Grid.Row="0" Style="{StaticResource SectionCard}" Margin="6,0,0,8">
                     <StackPanel>
                         <DockPanel Margin="0,0,0,10">
-                            <TextBlock Text="签名配置" Style="{StaticResource HeaderText}" />
-                            <Button DockPanel.Dock="Right" Content="🔍 扫描" FontSize="12" Padding="8,4"
-                                    Click="OnScanSigningConfig" />
+                            <TextBlock Text="Apple ID 签名管理" Style="{StaticResource HeaderText}" />
+                            <Button DockPanel.Dock="Right" Content="🔑 登录 / 切换账号" FontSize="12" Padding="10,4"
+                                    Click="OnOpenAppleLogin" />
                         </DockPanel>
 
                         <Grid Margin="0,0,0,8">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="90" />
                                 <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-
-                            <TextBlock Text="证书 (.p12)" VerticalAlignment="Center" />
-                            <ComboBox Grid.Column="1" x:Name="CertificateComboBox"
-                                      FontSize="12" Padding="6,4"
-                                      ItemsSource="{Binding AvailableCertificates}"
-                                      DisplayMemberPath="DisplayName"
-                                      SelectedItem="{Binding SelectedCertificate}"
-                                      IsEditable="True"
-                                      Text="{Binding P12Path, UpdateSourceTrigger=PropertyChanged}"
-                                      Margin="0,0,6,0" />
-                            <Button Grid.Column="2" Content="浏览" Padding="10,4"
-                                    Click="OnBrowseP12" />
+                            <TextBlock Text="账号:" Foreground="#64748B" FontSize="13" VerticalAlignment="Center" />
+                            <TextBlock Grid.Column="1" Text="{Binding AppleIdDisplay}" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Center" />
                         </Grid>
 
-                        <Grid Margin="0,0,0,8">
+                        <Grid Margin="0,0,0,4">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="90" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-
-                            <TextBlock Text="证书密码" VerticalAlignment="Center" />
-                            <PasswordBox x:Name="P12PasswordBox" Grid.Column="1" FontSize="12"
-                                         Padding="6,4" PasswordChanged="OnP12PasswordChanged" />
-                        </Grid>
-
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="110" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-
-                            <TextBlock Text="配置文件" VerticalAlignment="Center" />
-                            <ComboBox Grid.Column="1" x:Name="ProvisionComboBox"
-                                      FontSize="12" Padding="6,4"
-                                      ItemsSource="{Binding AvailableProvisions}"
-                                      DisplayMemberPath="DisplayName"
-                                      SelectedItem="{Binding SelectedProvision}"
-                                      IsEditable="True"
-                                      Text="{Binding MobileProvisionPath, UpdateSourceTrigger=PropertyChanged}"
-                                      Margin="0,0,6,0" />
-                            <Button Grid.Column="2" Content="浏览" Padding="10,4"
-                                    Click="OnBrowseProvision" />
+                            <TextBlock Text="签名状态:" Foreground="#64748B" FontSize="13" VerticalAlignment="Center" />
+                            <TextBlock Grid.Column="1" Text="{Binding ProvisionExpiryText, FallbackValue='未配置证书'}" FontSize="12" VerticalAlignment="Center" Foreground="#2563EB" TextWrapping="Wrap" />
                         </Grid>
                     </StackPanel>
                 </Border>

@@ -1,7 +1,7 @@
 <Window x:Class="AltServer.Windows.Views.AppleSetupDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Apple ID Setup" Height="580" Width="460"
+        Title="Apple ID 登录与签名配置" Height="430" Width="440"
         WindowStartupLocation="CenterOwner"
         Background="#F8FAFC" ResizeMode="NoResize">
 
@@ -32,29 +32,6 @@
                 </Setter.Value>
             </Setter>
         </Style>
-        <Style x:Key="BtnSecondary" TargetType="Button">
-            <Setter Property="Background" Value="#E2E8F0" />
-            <Setter Property="Foreground" Value="#475569" />
-            <Setter Property="FontSize" Value="13" />
-            <Setter Property="Padding" Value="12,8" />
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="border" Background="{TemplateBinding Background}"
-                                CornerRadius="6" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#CBD5E1" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
     </Window.Resources>
 
     <Grid Margin="28,24">
@@ -65,102 +42,58 @@
         </Grid.RowDefinitions>
 
         <!-- Title -->
-        <StackPanel Grid.Row="0" Margin="0,0,0,20">
-            <TextBlock Text="Apple ID Setup" FontSize="22" FontWeight="Bold" Foreground="#1E293B" />
-            <TextBlock Text="After login you need to provide certificate and provisioning profile" FontSize="13"
-                       Foreground="#64748B" Margin="0,4,0,0" />
+        <StackPanel Grid.Row="0" Margin="0,0,0,18">
+            <TextBlock Text="Apple ID 登录" FontSize="20" FontWeight="Bold" Foreground="#1E293B" />
+            <TextBlock Text="输入 Apple ID 与密码，系统将全自动配置证书与签名环境" FontSize="12"
+                       Foreground="#64748B" Margin="0,4,0,0" TextWrapping="Wrap" />
         </StackPanel>
 
         <!-- Form -->
         <StackPanel Grid.Row="1">
-            <!-- Auth status -->
-            <Border x:Name="AuthStatusBorder" Background="#F0F9FF" BorderBrush="#BAE6FD" BorderThickness="1"
-                    CornerRadius="6" Padding="12,10" Margin="0,0,0,14" Visibility="Collapsed">
-                <StackPanel>
-                    <TextBlock x:Name="AuthStatusText" FontSize="13" Foreground="#0369A1" TextWrapping="Wrap" />
-                    <TextBlock x:Name="AuthStatusHint" FontSize="11" Foreground="#0284C7" Margin="0,4,0,0" TextWrapping="Wrap" />
-                </StackPanel>
-            </Border>
+            <TextBlock Text="Apple ID (邮箱)" FontSize="13" Margin="0,0,0,6" />
+            <TextBox x:Name="AppleIdBox" FontSize="14" Padding="10,8"
+                     BorderBrush="#CBD5E1" BorderThickness="1" Background="White"
+                     Margin="0,0,0,12" />
 
-            <!-- Apple ID + Password -->
-            <StackPanel x:Name="LoginPanel">
-                <TextBlock Text="Apple ID (Email)" FontSize="13" Margin="0,0,0,6" />
-                <TextBox x:Name="AppleIdBox" FontSize="14" Padding="10,8"
+            <TextBlock Text="密码" FontSize="13" Margin="0,0,0,6" />
+            <PasswordBox x:Name="PasswordBox" FontSize="14" Padding="10,8"
                          BorderBrush="#CBD5E1" BorderThickness="1" Background="White"
-                         Margin="0,0,0,14" />
+                         Margin="0,0,0,12" />
 
-                <TextBlock Text="Password" FontSize="13" Margin="0,0,0,6" />
-                <PasswordBox x:Name="PasswordBox" FontSize="14" Padding="10,8"
-                             BorderBrush="#CBD5E1" BorderThickness="1" Background="White"
-                             Margin="0,0,0,14" />
-
-                <!-- 2FA -->
-                <StackPanel x:Name="TwoFaPanel" Visibility="Collapsed">
-                    <TextBlock Text="2FA Code" FontSize="13" Margin="0,0,0,6" />
-                    <TextBox x:Name="TwoFaCodeBox" FontSize="14" Padding="10,8"
-                             BorderBrush="#CBD5E1" BorderThickness="1" Background="White"
-                             Margin="0,0,0,10"
-                             HorizontalContentAlignment="Center" />
-                    <TextBlock x:Name="TwoFaHint" Text="Enter the 6-digit verification code received on your trusted device"
-                               FontSize="11" Foreground="#94A3B8" Margin="0,0,0,10"
-                               TextWrapping="Wrap" />
-                </StackPanel>
-
-                <!-- Anisette -->
-                <TextBlock Text="Anisette Server (optional)" FontSize="13" Margin="0,0,0,6" />
-                <TextBox x:Name="AnisetteUrlBox" FontSize="13" Padding="10,8"
-                         BorderBrush="#CBD5E1" BorderThickness="1" Background="White"
-                         Margin="0,0,0,4" />
-                <TextBlock Text="Leave empty to use built-in server; enter custom address like http://192.168.1.20:6969"
-                           FontSize="11" Foreground="#94A3B8" Margin="0,0,0,10" TextWrapping="Wrap" />
+            <!-- 2FA 验证码输入框（需要时自动展开） -->
+            <StackPanel x:Name="TwoFaPanel" Visibility="Collapsed" Margin="0,0,0,12">
+                <TextBlock Text="双重认证验证码 (2FA)" FontSize="13" FontWeight="SemiBold" Foreground="#2563EB" Margin="0,0,0,6" />
+                <TextBox x:Name="TwoFaCodeBox" FontSize="16" FontWeight="Bold" Padding="10,8"
+                         BorderBrush="#2563EB" BorderThickness="2" Background="White"
+                         Margin="0,0,0,4"
+                         HorizontalContentAlignment="Center" MaxLength="6" />
+                <TextBlock Text="请输入受信任苹果设备上弹出的 6 位双重认证验证码"
+                           FontSize="11" Foreground="#64748B" TextWrapping="Wrap" />
             </StackPanel>
 
-            <!-- Certificate file selection -->
-            <StackPanel x:Name="CertPanel" Visibility="Collapsed">
-                <TextBlock Text="Certificate File (.p12)" FontSize="13" Margin="0,0,0,6" />
-                <Grid Margin="0,0,0,12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBox x:Name="P12PathBox" FontSize="12" Padding="8,6"
-                             BorderBrush="#CBD5E1" BorderThickness="1" Background="#F8FAFC"
-                             IsReadOnly="True" />
-                    <Button Grid.Column="1" Content="Browse..." Padding="10,6" Margin="4,0,0,0"
-                            Style="{StaticResource BtnSecondary}" Click="OnBrowseP12" />
-                </Grid>
-
-                <TextBlock Text="Provisioning Profile (.mobileprovision)" FontSize="13" Margin="0,0,0,6" />
-                <Grid Margin="0,0,0,4">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBox x:Name="ProvisionPathBox" FontSize="12" Padding="8,6"
-                             BorderBrush="#CBD5E1" BorderThickness="1" Background="#F8FAFC"
-                             IsReadOnly="True" />
-                    <Button Grid.Column="1" Content="Browse..." Padding="10,6" Margin="4,0,0,0"
-                            Style="{StaticResource BtnSecondary}" Click="OnBrowseProvision" />
-                </Grid>
-
-                <TextBlock Text="Tip: Export .p12 from macOS Keychain Access, or download .mobileprovision from Developer Portal"
-                           FontSize="11" Foreground="#94A3B8" Margin="0,8,0,0" TextWrapping="Wrap" />
-            </StackPanel>
+            <!-- 高级设置 -->
+            <Expander Header="高级选项 (Anisette 硬件特征服务)" FontSize="11" Foreground="#94A3B8" Margin="0,4,0,0">
+                <StackPanel Margin="0,6,0,0">
+                    <TextBox x:Name="AnisetteUrlBox" FontSize="12" Padding="6,4"
+                             BorderBrush="#CBD5E1" BorderThickness="1" Background="White" />
+                    <TextBlock Text="默认留空即可自动使用内置 Anisette 硬件特征服务" FontSize="10" Foreground="#94A3B8" Margin="0,2,0,0" />
+                </StackPanel>
+            </Expander>
         </StackPanel>
 
         <!-- Bottom -->
-        <StackPanel Grid.Row="2" Margin="0,20,0,0">
+        <StackPanel Grid.Row="2" Margin="0,16,0,0">
             <TextBlock x:Name="StatusText" FontSize="12" Foreground="#64748B"
                        TextWrapping="Wrap" Margin="0,0,0,10" Visibility="Collapsed" />
-            <ProgressBar x:Name="ProgressBar" IsIndeterminate="True" Height="3"
+            <ProgressBar x:Name="ProgressBar" IsIndeterminate="True" Height="4"
                          Visibility="Collapsed" Background="#E2E8F0" Foreground="#2563EB"
                          Margin="0,0,0,10" />
 
             <DockPanel>
-                <Button Content="Skip" FontSize="13" Padding="16,8" Background="#E2E8F0"
+                <Button Content="跳过 / 取消" FontSize="13" Padding="16,8" Background="#E2E8F0"
                         Foreground="#475569" BorderThickness="0" Cursor="Hand"
                         Click="OnSkip" DockPanel.Dock="Right" Margin="10,0,0,0" />
-                <Button x:Name="SubmitBtn" Content="Login" Style="{StaticResource BtnPrimary}"
+                <Button x:Name="SubmitBtn" Content="登录并自动配置" Style="{StaticResource BtnPrimary}"
                         Click="OnSubmit" />
             </DockPanel>
         </StackPanel>

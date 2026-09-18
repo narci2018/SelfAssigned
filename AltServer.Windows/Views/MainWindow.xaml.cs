@@ -138,40 +138,10 @@ public partial class MainWindow : Window
         ViewModel.VerifyTools();
     }
 
-    private void OnBrowseP12(object sender, RoutedEventArgs e)
+    private void OnOpenAppleLogin(object sender, RoutedEventArgs e)
     {
-        var dlg = new Microsoft.Win32.OpenFileDialog
-        {
-            Title = "选择证书文件 (.p12)",
-            Filter = "证书文件 (*.p12)|*.p12|所有文件 (*.*)|*.*"
-        };
-
-        if (dlg.ShowDialog(this) == true)
-        {
-            _p12LastSetPath = dlg.FileName;
-            ViewModel.P12Path = dlg.FileName;
-        }
-    }
-
-    private string? _p12LastSetPath;
-
-    private void OnBrowseProvision(object sender, RoutedEventArgs e)
-    {
-        var dlg = new Microsoft.Win32.OpenFileDialog
-        {
-            Title = "选择配置文件 (.mobileprovision)",
-            Filter = "配置文件 (*.mobileprovision)|*.mobileprovision|所有文件 (*.*)|*.*"
-        };
-
-        if (dlg.ShowDialog(this) == true)
-        {
-            ViewModel.MobileProvisionPath = dlg.FileName;
-        }
-    }
-
-    private void OnP12PasswordChanged(object sender, RoutedEventArgs e)
-    {
-        ViewModel.P12Password = P12PasswordBox.Password;
+        var settings = new SettingsService();
+        ShowSetupWizard(settings);
     }
 
     private async void OnInstallIpa(object sender, RoutedEventArgs e)
@@ -243,10 +213,6 @@ public partial class MainWindow : Window
         LogService.Warning("复制日志失败: 剪贴板被其他程序占用");
     }
 
-    private void OnScanSigningConfig(object sender, RoutedEventArgs e)
-    {
-        ViewModel.ScanSigningConfig();
-    }
 
     private void OnClearLogs(object sender, RoutedEventArgs e)
     {

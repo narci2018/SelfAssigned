@@ -6,6 +6,7 @@ using System.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Text.Json;
 using System.Xml.Linq;
 
 namespace AltServer.Windows.Services;
@@ -19,6 +20,7 @@ namespace AltServer.Windows.Services;
 public class AppleProvisionService
 {
     private const string XCODE_SERVICES_BASE = "https://developerservices2.apple.com/services/QH65B2";
+    private const string XCODE_SERVICES_V1_BASE = "https://developerservices2.apple.com/services/v1";
     private const string CLIENT_ID = "XABBG36SBA";
     private const string PROTOCOL_VERSION = "QH65B2";
 
@@ -191,8 +193,8 @@ public class AppleProvisionService
 
             try
             {
-                var (csrPem, privateKeyPem) = GenerateCSR();
-                var (newCertId, certBytes) = await CreateCertificateAsync(csrPem);
+                var (csrPem, privateKeyPem, pubKeyBytes) = GenerateCSR();
+                var (newCertId, certBytes) = await CreateCertificateAsync(csrPem, pubKeyBytes);
                 certId = newCertId;
                 Progress?.Invoke("导出 P12 证书...");
                 p12Path = await SaveCertificateAsync(certBytes, privateKeyPem, bundleId);
@@ -397,45 +399,144 @@ public class AppleProvisionService
         return null;
     }
 
-    private async Task<(string certId, byte[] certBytes)> CreateCertificateAsync(string csrPem)
+    public class CertificateInfo
+    {
+        public string Id { get; set; } = string.Empty;
+        public string CertificateType { get; set; } = string.Empty;
+        public string DisplayName { get; set; } = string.Empty;
+        public string MachineName { get; set; } = string.Empty;
+        public string MachineId { get; set; } = string.Empty;
+        public string SerialNumber { get; set; } = string.Empty;
+        public byte[]? CertBytes { get; set; }
+    }
+
+    private async Task<(string certId, byte[] certBytes)> CreateCertificateAsync(string csrPem, byte[] expectedPublicKeyBytes)
     {
         var teamId = _teamId ?? _adsId ?? "";
-        var parameters = new Dictionary<string, object>
-        {
-            ["teamId"] = teamId,
-            ["csrContent"] = csrPem,
-            ["machineName"] = Environment.MachineName
-        };
-
-        var dict = await SendXcodeRequestAsync("ios/submitDevelopmentCSR.action", parameters);
-
         string certId = "";
         byte[]? certBytes = null;
 
-        if (dict.TryGetValue("certRequest", out var crObj) && crObj is Dictionary<string, object> crDict)
+        // 1. 先提交 CSR 请求
+        try
         {
-            if (crDict.TryGetValue("certificateId", out var cid)) certId = cid?.ToString() ?? "";
-            if (crDict.TryGetValue("certContent", out var cc))
+            var parameters = new Dictionary<string, object>
             {
-                certBytes = cc is byte[] b ? b : (cc is string s ? Convert.FromBase64String(s) : null);
+                ["teamId"] = teamId,
+                ["csrContent"] = csrPem,
+                ["machineName"] = Environment.MachineName
+            };
+
+            var dict = await SendXcodeRequestAsync("ios/submitDevelopmentCSR.action", parameters);
+
+            if (dict.TryGetValue("certRequest", out var crObj) && crObj is Dictionary<string, object> crDict)
+            {
+                if (crDict.TryGetValue("certificateId", out var cid)) certId = cid?.ToString() ?? "";
+                if (string.IsNullOrEmpty(certId) && crDict.TryGetValue("certRequestId", out var crid)) certId = crid?.ToString() ?? "";
+                if (crDict.TryGetValue("certContent", out var cc))
+                {
+                    certBytes = cc is byte[] b ? b : (cc is string s ? Convert.FromBase64String(s) : null);
+                }
+            }
+            if (certBytes == null && dict.TryGetValue("certificate", out var cObj) && cObj is Dictionary<string, object> cDict)
+            {
+                if (string.IsNullOrEmpty(certId) && cDict.TryGetValue("certificateId", out var cid)) certId = cid?.ToString() ?? "";
+                if (cDict.TryGetValue("certContent", out var cc))
+                {
+                    certBytes = cc is byte[] b ? b : (cc is string s ? Convert.FromBase64String(s) : null);
+                }
+            }
+            if (certBytes == null && dict.TryGetValue("certContent", out var directCc))
+            {
+                certBytes = directCc is byte[] b ? b : (directCc is string s ? Convert.FromBase64String(s) : null);
             }
         }
-        if (certBytes == null && dict.TryGetValue("certificate", out var cObj) && cObj is Dictionary<string, object> cDict)
+        catch (Exception ex) when (ex.Message.Contains("already have") || ex.Message.Contains("current iOS Development") || ex.Message.Contains("7252") || ex.Message.Contains("3200"))
         {
-            if (string.IsNullOrEmpty(certId) && cDict.TryGetValue("certificateId", out var cid)) certId = cid?.ToString() ?? "";
-            if (cDict.TryGetValue("certContent", out var cc))
+            LogService.Warning($"[Provision] 达到开发者证书上限或已有证书: {ex.Message}，尝试查询并吊销旧证书...");
+            var existingCerts = await FetchCertificatesAsync(teamId);
+            foreach (var ec in existingCerts)
             {
-                certBytes = cc is byte[] b ? b : (cc is string s ? Convert.FromBase64String(s) : null);
+                if (!string.IsNullOrEmpty(ec.Id))
+                {
+                    await RevokeCertificateAsync(teamId, ec.Id);
+                }
+            }
+
+            // 吊销后重新提交 CSR
+            var parameters = new Dictionary<string, object>
+            {
+                ["teamId"] = teamId,
+                ["csrContent"] = csrPem,
+                ["machineName"] = Environment.MachineName
+            };
+            var dict = await SendXcodeRequestAsync("ios/submitDevelopmentCSR.action", parameters);
+            if (dict.TryGetValue("certRequest", out var crObj) && crObj is Dictionary<string, object> crDict)
+            {
+                if (crDict.TryGetValue("certificateId", out var cid)) certId = cid?.ToString() ?? "";
+                if (string.IsNullOrEmpty(certId) && crDict.TryGetValue("certRequestId", out var crid)) certId = crid?.ToString() ?? "";
             }
         }
-        if (certBytes == null && dict.TryGetValue("certContent", out var directCc))
+
+        // 2. 如果 submitDevelopmentCSR 未直接在 XML 中返回 certContent（Apple 官方行为是通过 v1/certificates 获取）
+        if (certBytes == null || certBytes.Length == 0)
         {
-            certBytes = directCc is byte[] b ? b : (directCc is string s ? Convert.FromBase64String(s) : null);
+            LogService.Info($"[Provision] 通过 services/v1/certificates 获取证书数据 (预期 certId/certRequestId={certId})...");
+            
+            // 轮询最多 5 次（防止 Apple 后端签发延迟）
+            for (int attempt = 1; attempt <= 5; attempt++)
+            {
+                var certs = await FetchCertificatesAsync(teamId);
+                CertificateInfo? matched = null;
+
+                // 优先：公钥与当前私钥完全一致
+                foreach (var c in certs)
+                {
+                    if (c.CertBytes != null && c.CertBytes.Length > 0)
+                    {
+                        try
+                        {
+                            using var x509 = new X509Certificate2(c.CertBytes);
+                            if (x509.ExportSubjectPublicKeyInfo().SequenceEqual(expectedPublicKeyBytes))
+                            {
+                                matched = c;
+                                LogService.Success($"[Provision] 匹配到与本地私钥公钥完全一致的证书: {c.Id} ({c.DisplayName})");
+                                break;
+                            }
+                        }
+                        catch { }
+                    }
+                }
+
+                // 次优：根据 certificateId / certRequestId 匹配
+                if (matched == null && !string.IsNullOrEmpty(certId))
+                {
+                    matched = certs.FirstOrDefault(c => string.Equals(c.Id, certId, StringComparison.OrdinalIgnoreCase) && c.CertBytes != null && c.CertBytes.Length > 0);
+                }
+
+                // 再次：取列表中第一个具有证书内容的证书
+                if (matched == null && certs.Count > 0)
+                {
+                    matched = certs.FirstOrDefault(c => c.CertBytes != null && c.CertBytes.Length > 0);
+                }
+
+                if (matched != null && matched.CertBytes != null && matched.CertBytes.Length > 0)
+                {
+                    certBytes = matched.CertBytes;
+                    if (string.IsNullOrEmpty(certId)) certId = matched.Id;
+                    break;
+                }
+
+                if (attempt < 5)
+                {
+                    LogService.Info($"[Provision] 等待证书签发 (尝试 {attempt}/5)...");
+                    await Task.Delay(1000);
+                }
+            }
         }
 
         if (certBytes == null || certBytes.Length == 0)
         {
-            throw new AppleAuthException("创建证书成功但未在响应中找到证书数据 (certContent)");
+            throw new AppleAuthException("创建证书成功，但未能获取到证书数据 (certContent)");
         }
 
         if (string.IsNullOrEmpty(certId))
@@ -444,6 +545,95 @@ public class AppleProvisionService
         }
 
         return (certId, certBytes);
+    }
+
+    private async Task<List<CertificateInfo>> FetchCertificatesAsync(string teamId)
+    {
+        var list = new List<CertificateInfo>();
+        try
+        {
+            var query = $"teamId={Uri.EscapeDataString(teamId)}&filter[certificateType]=IOS_DEVELOPMENT";
+            using var doc = await SendXcodeJsonRequestAsync("certificates", "GET", query);
+            if (doc.RootElement.TryGetProperty("data", out var dataElem) && dataElem.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in dataElem.EnumerateArray())
+                {
+                    var id = item.TryGetProperty("id", out var idProp) ? idProp.GetString() ?? "" : "";
+                    var certInfo = new CertificateInfo { Id = id };
+                    if (item.TryGetProperty("attributes", out var attrs))
+                    {
+                        if (attrs.TryGetProperty("certificateType", out var ct)) certInfo.CertificateType = ct.GetString() ?? "";
+                        if (attrs.TryGetProperty("displayName", out var dn)) certInfo.DisplayName = dn.GetString() ?? "";
+                        if (attrs.TryGetProperty("machineName", out var mn)) certInfo.MachineName = mn.GetString() ?? "";
+                        if (attrs.TryGetProperty("machineId", out var mi)) certInfo.MachineId = mi.GetString() ?? "";
+                        if (attrs.TryGetProperty("serialNumber", out var sn)) certInfo.SerialNumber = sn.GetString() ?? "";
+                        if (attrs.TryGetProperty("certificateContent", out var cc))
+                        {
+                            var ccStr = cc.GetString();
+                            if (!string.IsNullOrEmpty(ccStr))
+                            {
+                                try
+                                {
+                                    certInfo.CertBytes = Convert.FromBase64String(ccStr.Replace(" ", "").Replace("\r", "").Replace("\n", ""));
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+                    list.Add(certInfo);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Warning($"[Provision] 获取开发者证书列表异常: {ex.Message}");
+        }
+        return list;
+    }
+
+    private async Task<bool> RevokeCertificateAsync(string teamId, string certId)
+    {
+        try
+        {
+            LogService.Info($"[Provision] 吊销旧开发者证书: {certId} (teamId: {teamId})");
+            var query = $"teamId={Uri.EscapeDataString(teamId)}";
+            using var doc = await SendXcodeJsonRequestAsync($"certificates/{certId}", "DELETE", query);
+            LogService.Success($"[Provision] 证书吊销成功: {certId}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            LogService.Warning($"[Provision] 吊销证书 {certId} 失败: {ex.Message}");
+            return false;
+        }
+    }
+
+    private async Task<JsonDocument> SendXcodeJsonRequestAsync(string endpoint, string httpMethodOverride, string? queryParams = null)
+    {
+        var url = $"{XCODE_SERVICES_V1_BASE}/{endpoint}";
+        var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Headers.TryAddWithoutValidation("X-HTTP-Method-Override", httpMethodOverride);
+        AddXcodeHeaders(request, accept: "application/vnd.api+json");
+
+        if (!string.IsNullOrEmpty(queryParams))
+        {
+            var jsonPayload = JsonSerializer.Serialize(new { urlEncodedQueryParams = queryParams });
+            request.Content = new StringContent(jsonPayload, Encoding.UTF8, "application/vnd.api+json");
+        }
+        else
+        {
+            request.Content = new StringContent("{}", Encoding.UTF8, "application/vnd.api+json");
+        }
+
+        var response = await _http.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        LogService.Info($"[Provision] v1/{endpoint} ({httpMethodOverride}) 响应: {response.StatusCode}, body: {Truncate(body, 300)}");
+
+        if (!response.IsSuccessStatusCode)
+            throw new AppleAuthException($"开发者 v1 API 请求失败: {response.StatusCode} - {Truncate(body, 200)}");
+
+        return JsonDocument.Parse(body);
     }
 
     private async Task<(string profileId, byte[] profileBytes)> DownloadTeamProfileAsync(string appIdId)
@@ -522,11 +712,11 @@ public class AppleProvisionService
         return dict;
     }
 
-    private void AddXcodeHeaders(HttpRequestMessage request)
+    private void AddXcodeHeaders(HttpRequestMessage request, string accept = "text/x-xml-plist")
     {
         // 1. Xcode 原生客户端基础头 (依据 i4Tools libacmr / Xcode 原生通信协议)
         request.Headers.TryAddWithoutValidation("User-Agent", "Xcode");
-        request.Headers.TryAddWithoutValidation("Accept", "text/x-xml-plist");
+        request.Headers.TryAddWithoutValidation("Accept", accept);
         request.Headers.TryAddWithoutValidation("Accept-Language", "en-us");
         request.Headers.TryAddWithoutValidation("X-Apple-App-Info", "com.apple.gs.xcode.auth");
         request.Headers.TryAddWithoutValidation("X-Xcode-Version", "11.2 (11B41)");
@@ -699,7 +889,7 @@ public class AppleProvisionService
 
     // MARK: - CSR 生成与本地证书管理
 
-    private (string csrPem, string privateKeyPem) GenerateCSR()
+    private (string csrPem, string privateKeyPem, byte[] publicKeyBytes) GenerateCSR()
     {
         using var rsa = RSA.Create(2048);
         var request = new CertificateRequest(
@@ -714,7 +904,8 @@ public class AppleProvisionService
                      "\n-----END CERTIFICATE REQUEST-----";
 
         var privateKeyPem = rsa.ExportPkcs8PrivateKeyPem();
-        return (csrPem, privateKeyPem);
+        var publicKeyBytes = rsa.ExportSubjectPublicKeyInfo();
+        return (csrPem, privateKeyPem, publicKeyBytes);
     }
 
     private string? FindValidLocalP12(string bundleId)

@@ -496,7 +496,7 @@ public class AppleProvisionService
                         try
                         {
                             using var x509 = new X509Certificate2(c.CertBytes);
-                            if (x509.ExportSubjectPublicKeyInfo().SequenceEqual(expectedPublicKeyBytes))
+                            if (x509.PublicKey.ExportSubjectPublicKeyInfo().SequenceEqual(expectedPublicKeyBytes))
                             {
                                 matched = c;
                                 LogService.Success($"[Provision] 匹配到与本地私钥公钥完全一致的证书: {c.Id} ({c.DisplayName})");

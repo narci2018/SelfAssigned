@@ -642,10 +642,8 @@ public class AppleProvisionService
 
     private async Task<JsonDocument> SendXcodeJsonRequestAsync(string endpoint, string httpMethodOverride, string? queryParams = null)
     {
-        // 1. URL 附加 query 参数（满足网关鉴权对 teamId 的前置路由检查）
-        var url = string.IsNullOrEmpty(queryParams)
-            ? $"{XCODE_SERVICES_V1_BASE}/{endpoint}"
-            : $"{XCODE_SERVICES_V1_BASE}/{endpoint}?{queryParams}";
+        // 1. URL 保持干净路径（所有参数均通过 body 的 urlEncodedQueryParams 传递，避免 Apple 网关报 PARAMETER_ERROR.DUPLICATE）
+        var url = $"{XCODE_SERVICES_V1_BASE}/{endpoint}";
 
         var request = new HttpRequestMessage(HttpMethod.Post, url);
         request.Headers.TryAddWithoutValidation("X-HTTP-Method-Override", httpMethodOverride);
@@ -655,7 +653,7 @@ public class AppleProvisionService
         }
         AddXcodeHeaders(request, accept: "application/vnd.api+json");
 
-        // 2. 构造纯净 JSON（避免 JsonSerializer 将 & 转义为 \u0026 导致 Apple 网关无法识别 teamId）
+        // 2. 构造纯净 JSON（避免 JsonSerializer 将 & 转义为 \u0026）
         string jsonPayload = !string.IsNullOrEmpty(queryParams)
             ? $"{{\"urlEncodedQueryParams\":\"{queryParams}\"}}"
             : "{}";
@@ -675,8 +673,20 @@ public class AppleProvisionService
         {
             try
             {
-                LogService.Info($"[Provision] 尝试原生 GET 请求作为后备: {url}");
-                var getReq = new HttpRequestMessage(HttpMethod.Get, url);
+                var getUrl = $"{XCODE_SERVICES_V1_BASE}/{endpoint}";
+                // 原生 GET 中 teamId 只能通过 Header 传递，URL 仅带 filter 参数
+                if (!string.IsNullOrEmpty(queryParams))
+                {
+                    var nativeQuery = queryParams
+                        .Replace($"teamId={_teamId}&", "")
+                        .Replace($"&teamId={_teamId}", "")
+                        .Replace($"teamId={_teamId}", "");
+                    if (!string.IsNullOrEmpty(nativeQuery))
+                        getUrl = $"{getUrl}?{nativeQuery}";
+                }
+
+                LogService.Info($"[Provision] 尝试原生 GET 请求作为后备: {getUrl}");
+                var getReq = new HttpRequestMessage(HttpMethod.Get, getUrl);
                 if (!string.IsNullOrEmpty(_teamId))
                     getReq.Headers.TryAddWithoutValidation("X-Apple-Team-Id", _teamId);
                 AddXcodeHeaders(getReq, accept: "application/vnd.api+json");
@@ -698,8 +708,9 @@ public class AppleProvisionService
         {
             try
             {
-                LogService.Info($"[Provision] 尝试原生 DELETE 请求作为后备: {url}");
-                var delReq = new HttpRequestMessage(HttpMethod.Delete, url);
+                var delUrl = $"{XCODE_SERVICES_V1_BASE}/{endpoint}";
+                LogService.Info($"[Provision] 尝试原生 DELETE 请求作为后备: {delUrl}");
+                var delReq = new HttpRequestMessage(HttpMethod.Delete, delUrl);
                 if (!string.IsNullOrEmpty(_teamId))
                     delReq.Headers.TryAddWithoutValidation("X-Apple-Team-Id", _teamId);
                 AddXcodeHeaders(delReq, accept: "application/vnd.api+json");

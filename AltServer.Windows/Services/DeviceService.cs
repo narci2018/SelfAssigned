@@ -79,10 +79,45 @@ public class DeviceService
         }
     }
 
-    /// <summary>安装IPA应用</summary>
+    /// <summary>安装IPA应用（安装前验证设备连接状态）</summary>
     public void InstallIpa(string udid, string ipaPath)
     {
+        // 安装前先确认 lockdownd 可达，给出比 ideviceinstaller 更友好的错误
+        ValidateLockdownOrThrow(udid);
         RunTool("ideviceinstaller", $"-u {udid} -i \"{ipaPath}\"", timeoutMs: 300_000);
+    }
+
+    /// <summary>
+    /// 验证 lockdownd 连接是否正常。
+    /// 如果设备屏幕锁定 / 未点击"信任此电脑" / USB不稳定，在安装前抛出友好错误。
+    /// </summary>
+    private void ValidateLockdownOrThrow(string udid)
+    {
+        try
+        {
+            var result = RunToolNoThrow("idevicepair", $"-u {udid} validate", timeoutMs: 10_000);
+            if (result.Contains("SUCCESS", StringComparison.OrdinalIgnoreCase))
+                return; // 连接正常
+
+            // validate 返回非 SUCCESS，说明信任关系失效
+            throw new InvalidOperationException(
+                "设备连接验证失败：请确认设备已解锁屏幕，并在弹出的对话框中点击「信任此电脑」。\n" +
+                $"(idevicepair validate 输出: {result.Trim()})");
+        }
+        catch (TimeoutException)
+        {
+            throw new InvalidOperationException(
+                "设备连接超时：请检查 USB 连接是否稳定，设备屏幕是否亮着且已解锁。");
+        }
+        catch (InvalidOperationException)
+        {
+            throw; // 直接向上传递
+        }
+        catch (Exception ex)
+        {
+            // validate 工具本身出错（工具不存在等），不阻止安装，降级继续
+            LogService.Warning($"[Install] 前置连接验证跳过: {ex.Message}");
+        }
     }
 
     /// <summary>卸载应用</summary>

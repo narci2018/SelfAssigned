@@ -727,7 +727,34 @@ public class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            LogService.Error($"签名/安装失败: {ex.Message}");
+            var msg = ex.Message;
+
+            // 针对常见安装失败给出明确指导
+            if (msg.Contains("lockdownd", StringComparison.OrdinalIgnoreCase) ||
+                msg.Contains("Could not connect", StringComparison.OrdinalIgnoreCase))
+            {
+                LogService.Error(
+                    "安装失败：无法连接到设备守护进程（lockdownd）。\n" +
+                    "请检查：\n" +
+                    "  1. 设备屏幕是否亮着且已解锁（不能处于锁屏状态）\n" +
+                    "  2. 是否已在设备上点击「信任此电脑」\n" +
+                    "  3. USB 线连接是否稳定（尝试重新插拔）\n" +
+                    "  4. 如果是 iPad，确认描述文件已包含该设备 UDID\n" +
+                    $"（原始错误: {msg}）");
+            }
+            else if (msg.Contains("ProfileInstall", StringComparison.OrdinalIgnoreCase) ||
+                     msg.Contains("MismatchedApplicationIdentifier", StringComparison.OrdinalIgnoreCase))
+            {
+                LogService.Error(
+                    "安装失败：描述文件与设备不匹配。\n" +
+                    "可能原因：当前描述文件是为其他设备（如 iPhone）生成的，不包含此 iPad 的 UDID。\n" +
+                    "请点击「登录 / 切换账号」重新生成适合此设备的描述文件。\n" +
+                    $"（原始错误: {msg}）");
+            }
+            else
+            {
+                LogService.Error($"签名/安装失败: {msg}");
+            }
             return false;
         }
         finally

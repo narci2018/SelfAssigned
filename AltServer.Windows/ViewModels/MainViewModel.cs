@@ -705,6 +705,16 @@ public class MainViewModel : ObservableObject
             var signedIpa = await _signing.SignIpaAsync(ipaPath, outputIpa, options);
             LogService.Success($"签名完成: {Path.GetFileName(signedIpa)}");
 
+            // 检查设备连接方式：Wi-Fi 连接无法用 ideviceinstaller 安装 IPA
+            if (device.Connection == Models.ConnectionType.WiFi)
+            {
+                LogService.Error(
+                    $"无法安装到 {(string.IsNullOrEmpty(device.Name) ? device.Udid[..8] : device.Name)}：\n" +
+                    "该设备通过 Wi-Fi 连接，ideviceinstaller 不支持 Wi-Fi 模式安装 IPA。\n" +
+                    "请用 USB 数据线连接 iPad，或在「设置 → 通用 → VPN与设备管理 → 开发者模式」中关闭「通过网络连接」。");
+                return false;
+            }
+
             LogService.Info($"正在安装到 {device.Name}...");
             await Task.Run(() => _devices.InstallIpa(device.Udid, signedIpa));
             LogService.Success($"安装成功: {Path.GetFileName(ipaPath)} → {device.Name}");

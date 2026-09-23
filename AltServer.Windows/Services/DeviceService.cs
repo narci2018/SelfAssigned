@@ -19,7 +19,7 @@ public class DeviceService
         _toolsDir = toolsDir;
     }
 
-    /// <summary>列出所有连接到本机的iOS设备</summary>
+    /// <summary>列出所有连接到本机的iOS设备，自动区分 USB 和 Wi-Fi 连接</summary>
     public List<Device> ListDevices()
     {
         var devices = new List<Device>();
@@ -27,9 +27,23 @@ public class DeviceService
         var udids = RunTool("idevice_id", "-l", timeoutMs: 15_000)
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
+        // 检测通过 Wi-Fi 连接的设备（idevice_id -n 仅列出网络设备）
+        var wifiUdids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var wifiOutput = RunTool("idevice_id", "-n", timeoutMs: 8_000);
+            foreach (var line in wifiOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                wifiUdids.Add(line);
+        }
+        catch { /* 旧版工具不支持 -n，忽略 */ }
+
         foreach (var udid in udids)
         {
-            var device = new Device { Udid = udid };
+            var device = new Device
+            {
+                Udid = udid,
+                Connection = wifiUdids.Contains(udid) ? ConnectionType.WiFi : ConnectionType.Usb
+            };
 
             try
             {

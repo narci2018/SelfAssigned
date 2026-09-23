@@ -206,7 +206,11 @@ public partial class AppleSetupDialog : Window
 
                 var bundleId = "com.selfassigned.altserver";
                 var appName = "AltServer";
-                var provResult = await provisionService.AutoProvisionAsync(bundleId, appName, dev.Name, dev.Udid);
+                // Apple 开发者门户要求 name 不能为空：当 ideviceinfo 未能获取设备名时用 fallback
+                var deviceName = string.IsNullOrWhiteSpace(dev.Name)
+                    ? $"MyDevice-{dev.Udid.Replace("-", "")[^8..]}"
+                    : dev.Name;
+                var provResult = await provisionService.AutoProvisionAsync(bundleId, appName, deviceName, dev.Udid);
 
                 if (provResult.Success && !string.IsNullOrEmpty(provResult.P12Path) && !string.IsNullOrEmpty(provResult.ProvisionPath))
                 {

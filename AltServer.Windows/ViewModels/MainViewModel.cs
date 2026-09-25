@@ -569,11 +569,12 @@ public class MainViewModel : ObservableObject
             if (ok)
             {
                 device.IsPaired = true;
-                LogService.Success($"设备 {device.Name} 配对成功");
+                _devices.RefreshDeviceInfo(device);
+                LogService.Success($"设备 {device.DisplayName} 配对成功");
             }
             else
             {
-                LogService.Warning($"设备 {device.Name} 配对失败，请确认手机上已点击“信任”");
+                LogService.Warning($"设备 {device.DisplayName} 配对失败，请确认手机/iPad上已点击“信任”并输入锁屏密码");
             }
 
             return ok;
@@ -743,9 +744,9 @@ public class MainViewModel : ObservableObject
                 return false;
             }
 
-            LogService.Info($"正在安装到 {device.Name}...");
+            LogService.Info($"正在安装到 {device.DisplayName}...");
             await Task.Run(() => _devices.InstallIpa(device.Udid, signedIpa));
-            LogService.Success($"安装成功: {Path.GetFileName(ipaPath)} → {device.Name}");
+            LogService.Success($"安装成功: {Path.GetFileName(ipaPath)} → {device.DisplayName}");
 
             // 注册到已安装应用列表（使用描述文件中的真实 Bundle ID）
             var realBundleId = SigningService.ParseProvisionBundleId(_settings.Data.MobileProvisionPath)

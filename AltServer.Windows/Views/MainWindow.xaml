@@ -150,7 +150,7 @@
                                                      VerticalAlignment="Center" />
                                             <StackPanel>
                                                 <TextBlock FontWeight="SemiBold">
-                                                    <Run Text="{Binding Name}" />
+                                                    <Run Text="{Binding DisplayName}" />
                                                 </TextBlock>
                                                 <TextBlock FontSize="11" Foreground="#64748B"
                                                            Text="{Binding Udid}" />

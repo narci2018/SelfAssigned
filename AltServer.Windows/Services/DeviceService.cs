@@ -56,13 +56,50 @@ public class DeviceService
             }
             catch
             {
-                // 设备信息获取失败时保留UDID
+                // 如果常规查询失败（如尚未配对），尝试无需配对的简单模式(-s)读取型号与系统版本
+                try
+                {
+                    var product = RunToolNoThrow("ideviceinfo", $"-u {udid} -s -k ProductType", timeoutMs: 5_000).Trim();
+                    if (!string.IsNullOrWhiteSpace(product)) device.ProductType = product;
+
+                    var os = RunToolNoThrow("ideviceinfo", $"-u {udid} -s -k ProductVersion", timeoutMs: 5_000).Trim();
+                    if (!string.IsNullOrWhiteSpace(os)) device.OsVersion = os;
+                }
+                catch { }
+            }
+
+            // 无论如何保证有一个非空的识别名称
+            if (string.IsNullOrWhiteSpace(device.Name))
+            {
+                device.Name = device.DisplayName;
             }
 
             devices.Add(device);
         }
 
         return devices;
+    }
+
+    /// <summary>配对成功后刷新并补全设备详细信息（设备名、型号、系统版本）</summary>
+    public void RefreshDeviceInfo(Device device)
+    {
+        try
+        {
+            var name = RunToolNoThrow("ideviceinfo", $"-u {device.Udid} -k DeviceName", timeoutMs: 8_000).Trim();
+            if (!string.IsNullOrWhiteSpace(name)) device.Name = name;
+
+            var model = RunToolNoThrow("ideviceinfo", $"-u {device.Udid} -k ModelNumber", timeoutMs: 8_000).Trim();
+            if (!string.IsNullOrWhiteSpace(model)) device.Model = model;
+
+            var product = RunToolNoThrow("ideviceinfo", $"-u {device.Udid} -k ProductType", timeoutMs: 8_000).Trim();
+            if (!string.IsNullOrWhiteSpace(product)) device.ProductType = product;
+
+            var os = RunToolNoThrow("ideviceinfo", $"-u {device.Udid} -k ProductVersion", timeoutMs: 8_000).Trim();
+            if (!string.IsNullOrWhiteSpace(os)) device.OsVersion = os;
+
+            device.IsPaired = IsPaired(device.Udid);
+        }
+        catch { }
     }
 
     /// <summary>检查设备是否已配对</summary>
@@ -93,47 +130,49 @@ public class DeviceService
         }
     }
 
-    /// <summary>安装IPA应用（安装前验证设备连接状态）</summary>
+    /// <summary>安装IPA应用，具备 lockdownd 连接重试与自动恢复机制</summary>
     public void InstallIpa(string udid, string ipaPath)
     {
-        // 安装前先确认 lockdownd 可达，给出比 ideviceinstaller 更友好的错误
-        ValidateLockdownOrThrow(udid);
-        RunTool("ideviceinstaller", $"-u {udid} -i \"{ipaPath}\"", timeoutMs: 300_000);
-    }
-
-    /// <summary>
-    /// 安装前尝试确认连接状态。validate 不可靠（部分 iPad 型号始终失败），
-    /// 此处仅做诊断日志，不阻断安装流程。
-    /// </summary>
-    private void ValidateLockdownOrThrow(string udid)
-    {
         try
         {
-            // 仅做一次快速 validate，结果只用于日志，不阻断安装
-            var result = RunToolNoThrow("idevicepair", $"-u {udid} validate", timeoutMs: 8_000);
-            if (!result.Contains("SUCCESS", StringComparison.OrdinalIgnoreCase))
+            // 直接尝试安装（不提前破坏已有配对会话）
+            RunTool("ideviceinstaller", $"-u {udid} -i \"{ipaPath}\"", timeoutMs: 300_000);
+            return;
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("lockdownd", StringComparison.OrdinalIgnoreCase) ||
+                                                 ex.Message.Contains("Could not connect", StringComparison.OrdinalIgnoreCase))
+        {
+            LogService.Warning($"[Install] 首次连接 lockdownd 遇到波动，尝试自动重新配对并重试...");
+
+            // 自动恢复：执行一次重新配对握手
+            try
             {
-                // 尝试重新 pair（处理签名期间 iPad 锁屏导致信任失效的情况）
                 var pairOut = RunToolNoThrow("idevicepair", $"-u {udid} pair", timeoutMs: 15_000);
-                LogService.Info($"[Install] 重新配对结果: {pairOut.Trim().Split('\n')[0]}");
-                // 不再阻断：即使 validate/pair 输出异常，也继续尝试安装
-                // ideviceinstaller 会给出真正的安装结果
+                LogService.Info($"[Install] 重新配对: {pairOut.Trim().Split('\n')[0]}");
+            }
+            catch { }
+
+            // 关键：配对握手后必须休眠 2.5 秒，给设备端 lockdownd 守护进程重启和重载证书的时间
+            System.Threading.Thread.Sleep(2500);
+
+            // 再次尝试安装
+            try
+            {
+                RunTool("ideviceinstaller", $"-u {udid} -i \"{ipaPath}\"", timeoutMs: 300_000);
+                return;
+            }
+            catch (Exception retryEx)
+            {
+                throw new InvalidOperationException(
+                    "无法连接到设备守护进程（lockdownd）。\n" +
+                    "排查建议：\n" +
+                    "  1. 请检查设备屏幕已点亮并在主屏幕（必须解锁且不能锁屏）\n" +
+                    "  2. 设备若弹出「信任此电脑」，请点击「信任」并【必须在设备上输入锁屏密码】\n" +
+                    "  3. 请彻底退出可能占用设备通信的后台软件（如 iTunes、爱思助手、3uTools）\n" +
+                    "  4. 尝试拔掉 USB 数据线，等待 3 秒后重新插上电脑\n" +
+                    $"（原始错误: {retryEx.Message}）", retryEx);
             }
         }
-        catch (Exception ex)
-        {
-            LogService.Warning($"[Install] 连接预检查跳过 ({ex.Message})，继续安装...");
-        }
-    }
-
-    private bool IsValidated(string udid)
-    {
-        try
-        {
-            var result = RunToolNoThrow("idevicepair", $"-u {udid} validate", timeoutMs: 10_000);
-            return result.Contains("SUCCESS", StringComparison.OrdinalIgnoreCase);
-        }
-        catch { return false; }
     }
 
 

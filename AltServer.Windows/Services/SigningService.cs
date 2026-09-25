@@ -271,4 +271,35 @@ public class SigningService
     }
 
     public string? LastSigningOutput { get; private set; }
+
+    /// <summary>解析 .mobileprovision 中已注册的设备 UDID 列表（ProvisionedDevices 字段）</summary>
+    public static HashSet<string> ParseProvisionDeviceUdids(string mobileProvisionPath)
+    {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!File.Exists(mobileProvisionPath)) return result;
+        try
+        {
+            var text = Encoding.UTF8.GetString(File.ReadAllBytes(mobileProvisionPath));
+            const string marker = "<key>ProvisionedDevices</key>";
+            var idx = text.IndexOf(marker, StringComparison.Ordinal);
+            if (idx < 0) return result; // 通配符/企业描述文件无此字段，视为允许所有设备
+            var arrayStart = text.IndexOf("<array>", idx, StringComparison.Ordinal);
+            var arrayEnd   = text.IndexOf("</array>", idx, StringComparison.Ordinal);
+            if (arrayStart < 0 || arrayEnd < 0) return result;
+            var section = text[(arrayStart + 7)..arrayEnd];
+            var pos = 0;
+            while (true)
+            {
+                var s = section.IndexOf("<string>", pos, StringComparison.Ordinal);
+                if (s < 0) break;
+                s += 8;
+                var e = section.IndexOf("</string>", s, StringComparison.Ordinal);
+                if (e < 0) break;
+                result.Add(section[s..e].Trim());
+                pos = e + 9;
+            }
+        }
+        catch { }
+        return result;
+    }
 }

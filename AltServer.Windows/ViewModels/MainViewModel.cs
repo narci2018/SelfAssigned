@@ -715,6 +715,18 @@ public class MainViewModel : ObservableObject
                 return false;
             }
 
+            // 检查描述文件是否包含目标设备 UDID（免费开发者账号描述文件只包含注册的设备）
+            var provisionedUdids = SigningService.ParseProvisionDeviceUdids(_settings.Data.MobileProvisionPath);
+            if (provisionedUdids.Count > 0 && !provisionedUdids.Contains(device.Udid))
+            {
+                var deviceLabel = string.IsNullOrEmpty(device.Name) ? device.Udid[..12] : device.Name;
+                LogService.Error(
+                    $"描述文件不包含此设备（{deviceLabel}），无法安装。\n" +
+                    $"当前描述文件已注册 {provisionedUdids.Count} 台设备，但不含此 {(device.ProductType.StartsWith("iPad") ? "iPad" : "设备")}。\n" +
+                    "请点击「登录 / 切换账号」重新生成包含此设备的描述文件，然后再安装。");
+                return false;
+            }
+
             LogService.Info($"正在安装到 {device.Name}...");
             await Task.Run(() => _devices.InstallIpa(device.Udid, signedIpa));
             LogService.Success($"安装成功: {Path.GetFileName(ipaPath)} → {device.Name}");

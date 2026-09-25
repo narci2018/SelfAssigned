@@ -102,21 +102,31 @@ public class DeviceService
     }
 
     /// <summary>
-    /// 验证 lockdownd 连接是否正常。
-    /// 如果设备屏幕锁定 / 未点击"信任此电脑" / USB不稳定，在安装前抛出友好错误。
+    /// 验证 lockdownd 连接是否正常。validate 失败时自动尝试重新 pair（处理签名期间设备锁屏的情况）。
     /// </summary>
     private void ValidateLockdownOrThrow(string udid)
     {
         try
         {
-            var result = RunToolNoThrow("idevicepair", $"-u {udid} validate", timeoutMs: 10_000);
-            if (result.Contains("SUCCESS", StringComparison.OrdinalIgnoreCase))
-                return; // 连接正常
+            if (IsValidated(udid)) return;
 
-            // validate 返回非 SUCCESS，说明信任关系失效
-            throw new InvalidOperationException(
-                "设备连接验证失败：请确认设备已解锁屏幕，并在弹出的对话框中点击「信任此电脑」。\n" +
-                $"(idevicepair validate 输出: {result.Trim()})");
+            // validate 失败（如签名期间 iPad 锁屏导致信任失效），自动重新 pair 一次
+            LogService.Info($"[Install] 连接状态失效，尝试重新配对设备 {udid[..8]}...");
+            var pairOut = RunToolNoThrow("idevicepair", $"-u {udid} pair", timeoutMs: 20_000);
+            if (!pairOut.Contains("SUCCESS", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "设备连接验证失败：请确认设备屏幕已亮着且已在弹框中点击「信任此电脑」。\n" +
+                    "提示：签名期间请保持设备屏幕常亮（临时关闭自动锁屏）。\n" +
+                    $"（pair 输出: {pairOut.Trim()}）");
+            }
+
+            // 重新 pair 后再 validate 一次确认
+            if (!IsValidated(udid))
+            {
+                throw new InvalidOperationException(
+                    "重新配对后仍无法验证连接，请拔插 USB 线后重试。");
+            }
         }
         catch (TimeoutException)
         {
@@ -125,14 +135,24 @@ public class DeviceService
         }
         catch (InvalidOperationException)
         {
-            throw; // 直接向上传递
+            throw;
         }
         catch (Exception ex)
         {
-            // validate 工具本身出错（工具不存在等），不阻止安装，降级继续
             LogService.Warning($"[Install] 前置连接验证跳过: {ex.Message}");
         }
     }
+
+    private bool IsValidated(string udid)
+    {
+        try
+        {
+            var result = RunToolNoThrow("idevicepair", $"-u {udid} validate", timeoutMs: 10_000);
+            return result.Contains("SUCCESS", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
+
 
     /// <summary>卸载应用</summary>
     public void UninstallApp(string udid, string bundleId)

@@ -16,6 +16,7 @@ public class SettingsService
     public class Settings
     {
         public string ToolsDir { get; set; } = "tools";
+        // 全局默认签名文件（向后兼容，新版优先使用 DeviceConfigs[udid]）
         public string P12Path { get; set; } = string.Empty;
         public string P12Password { get; set; } = string.Empty;
         public string MobileProvisionPath { get; set; } = string.Empty;
@@ -29,15 +30,51 @@ public class SettingsService
         public List<Models.Source> Sources { get; set; } = new();
         public bool SetupCompleted { get; set; }
         public string? AppleId { get; set; }
-
-        /// <summary>
-        /// Anisette source base URL. Supports v3/omnisette endpoints
-        /// (POST {url}/v3/get_headers) and v1 endpoints (GET {url}).
-        /// For a phone-hosted anisette server this is e.g. http://192.168.1.20:6969.
-        /// Empty = use built-in default server list.
-        /// </summary>
         public string AnisetteUrl { get; set; } = string.Empty;
+
+        /// <summary>每台设备独立的证书/描述文件配置，按 UDID 索引</summary>
+        public Dictionary<string, DeviceSigningConfig> DeviceConfigs { get; set; } = new();
+
+        /// <summary>获取指定设备的签名配置，不存在时回落到全局默认值</summary>
+        public DeviceSigningConfig GetDeviceConfig(string udid)
+        {
+            if (DeviceConfigs.TryGetValue(udid, out var cfg) &&
+                !string.IsNullOrEmpty(cfg.P12Path) &&
+                File.Exists(cfg.P12Path))
+                return cfg;
+
+            // 回落到全局配置（兼容旧版）
+            return new DeviceSigningConfig
+            {
+                P12Path = P12Path,
+                P12Password = P12Password,
+                MobileProvisionPath = MobileProvisionPath
+            };
+        }
+
+        /// <summary>保存指定设备的签名配置，同时更新全局默认值</summary>
+        public void SetDeviceConfig(string udid, string p12Path, string p12Password, string provisionPath)
+        {
+            DeviceConfigs[udid] = new DeviceSigningConfig
+            {
+                P12Path = p12Path,
+                P12Password = p12Password,
+                MobileProvisionPath = provisionPath
+            };
+            // 同时写入全局（保持向后兼容 + 作为新设备的默认值）
+            P12Path = p12Path;
+            P12Password = p12Password;
+            MobileProvisionPath = provisionPath;
+        }
     }
+
+    public class DeviceSigningConfig
+    {
+        public string P12Path { get; set; } = string.Empty;
+        public string P12Password { get; set; } = string.Empty;
+        public string MobileProvisionPath { get; set; } = string.Empty;
+    }
+
 
     public SettingsService()
     {

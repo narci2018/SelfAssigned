@@ -106,6 +106,19 @@ public class MainViewModel : ObservableObject
         {
             if (SetField(ref _selectedDevice, value))
             {
+                // 切换设备时加载该设备的专属证书配置到全局字段（供 UI 绑定显示）
+                if (value is not null)
+                {
+                    var cfg = _settings.Data.GetDeviceConfig(value.Udid);
+                    if (!string.IsNullOrEmpty(cfg.P12Path))
+                    {
+                        _settings.Data.P12Path = cfg.P12Path;
+                        _settings.Data.P12Password = cfg.P12Password;
+                        _settings.Data.MobileProvisionPath = cfg.MobileProvisionPath;
+                        OnPropertyChanged(nameof(P12Path));
+                        OnPropertyChanged(nameof(MobileProvisionPath));
+                    }
+                }
                 LoadDeviceApp();
             }
         }
@@ -688,18 +701,21 @@ public class MainViewModel : ObservableObject
 
             LogService.Info($"开始签名: {Path.GetFileName(ipaPath)}");
 
-            var p12Password = SigningService.ResolveP12Password(_settings.Data.P12Path, _settings.Data.P12Password);
-            if (!string.IsNullOrEmpty(p12Password) && _settings.Data.P12Password != p12Password)
+            // 取当前设备专属的证书/描述文件（多设备时各用各的，不互相覆盖）
+            var devCfg = _settings.Data.GetDeviceConfig(device.Udid);
+            var p12Password = SigningService.ResolveP12Password(devCfg.P12Path, devCfg.P12Password);
+            if (!string.IsNullOrEmpty(p12Password) && devCfg.P12Password != p12Password)
             {
-                _settings.Data.P12Password = p12Password;
+                _settings.Data.SetDeviceConfig(device.Udid, devCfg.P12Path, p12Password, devCfg.MobileProvisionPath);
                 _settings.Save();
+                devCfg = _settings.Data.GetDeviceConfig(device.Udid);
             }
 
             var options = new SigningService.SigningOptions
             {
-                P12Path = _settings.Data.P12Path,
+                P12Path = devCfg.P12Path,
                 P12Password = p12Password,
-                MobileProvisionPath = _settings.Data.MobileProvisionPath
+                MobileProvisionPath = devCfg.MobileProvisionPath
             };
 
             var signedIpa = await _signing.SignIpaAsync(ipaPath, outputIpa, options);
@@ -830,10 +846,11 @@ public class MainViewModel : ObservableObject
                             Path.GetTempPath(), "AltServer",
                             $"{app.BundleId}_refreshed_{DateTime.Now:yyyyMMdd_HHmmss}.ipa");
 
-                        // 始终用当前 settings 中最新的证书/描述文件，注册表里的路径可能是旧证书（已被吊销）
-                        var p12Path = _settings.Data.P12Path;
-                        var provisionPath = _settings.Data.MobileProvisionPath;
-                        var p12Password = SigningService.ResolveP12Password(p12Path, _settings.Data.P12Password);
+                        // 取该设备的专属证书配置（多设备时各用各的，避免互相覆盖）
+                        var devRefreshCfg = _settings.Data.GetDeviceConfig(device.Udid);
+                        var p12Path = devRefreshCfg.P12Path;
+                        var provisionPath = devRefreshCfg.MobileProvisionPath;
+                        var p12Password = SigningService.ResolveP12Password(p12Path, devRefreshCfg.P12Password);
                         var options = new SigningService.SigningOptions
                         {
                             P12Path = p12Path,

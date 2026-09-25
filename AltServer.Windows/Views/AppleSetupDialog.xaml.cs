@@ -222,9 +222,8 @@ public partial class AppleSetupDialog : Window
 
                     settings.Data.AppleId = _appleId;
                     settings.Data.AnisetteUrl = AnisetteUrlBox.Text.Trim();
-                    settings.Data.P12Path = provResult.P12Path;
-                    settings.Data.P12Password = "temp123";
-                    settings.Data.MobileProvisionPath = provResult.ProvisionPath;
+                    // 将证书/描述文件存入该设备专属配置（多设备互不覆盖）
+                    settings.Data.SetDeviceConfig(dev.Udid, provResult.P12Path, "temp123", provResult.ProvisionPath);
                     settings.Data.SetupCompleted = true;
                     settings.Save();
 

@@ -195,18 +195,20 @@ public class DeviceService
                 }
                 catch (Exception retryEx)
                 {
-                    // 诊断：抓取 ideviceinfo 详细调试信息以供排查
-                    var diag = RunToolNoThrow("ideviceinfo", $"-u {udid}", timeoutMs: 5_000);
-                    var diagSummary = string.IsNullOrWhiteSpace(diag) ? "无响应" : diag.Trim().Split('\n')[0];
+                    // 诊断：抓取 ideviceinfo -d 详细调试信息以供排查
+                    var diag = RunToolNoThrow("ideviceinfo", $"-u {udid} -d", timeoutMs: 8_000);
+                    var diagLines = diag.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    var diagSummary = diagLines.Length > 0 ? string.Join(" | ", diagLines.Take(3)) : "无响应";
 
                     throw new InvalidOperationException(
                         "无法连接到设备守护进程（lockdownd）。\n" +
-                        $"设备状态诊断: {diagSummary}\n" +
+                        $"设备底层诊断: {diagSummary}\n" +
                         "排查建议：\n" +
                         "  1. 请检查设备屏幕已点亮并在主屏幕（必须解锁且不能锁屏）\n" +
                         "  2. 设备若弹出「信任此电脑」，请点击「信任」并【必须在设备上输入锁屏密码】\n" +
-                        "  3. 请彻底退出可能占用设备通信的后台软件（如 iTunes、爱思助手、3uTools）\n" +
-                        "  4. 尝试拔掉 USB 数据线，等待 3 秒后重新插上电脑\n" +
+                        "  3. 请检查设备系统时间是否准确（时间偏差过大会导致 SSL 握手拒绝）\n" +
+                        "  4. 请彻底退出可能占用设备通信的后台软件（如 iTunes、爱思助手、3uTools）\n" +
+                        "  5. 尝试拔掉 USB 数据线，等待 3 秒后重新插上电脑\n" +
                         $"（原始错误: {retryEx.Message}）", retryEx);
                 }
             }
@@ -407,7 +409,10 @@ public class DeviceService
             throw new TimeoutException($"工具执行超时: {toolName}");
         }
 
-        // 不检查退出码，直接返回 stdout（兼容部分工具非零退出但有效输出的情况）
-        return stdoutTask.GetAwaiter().GetResult();
+        var stdout = stdoutTask.GetAwaiter().GetResult();
+        var stderr = stderrTask.GetAwaiter().GetResult();
+
+        // 优先返回 stdout，若为空（如工具报错写在 stderr）则返回 stderr
+        return !string.IsNullOrWhiteSpace(stdout) ? stdout : stderr;
     }
 }

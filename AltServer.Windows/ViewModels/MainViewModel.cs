@@ -818,19 +818,23 @@ public class MainViewModel : ObservableObject
                             Path.GetTempPath(), "AltServer",
                             $"{app.BundleId}_refreshed_{DateTime.Now:yyyyMMdd_HHmmss}.ipa");
 
-                        var p12Path = app.P12Path ?? _settings.Data.P12Path;
-                        var p12Password = SigningService.ResolveP12Password(p12Path, app.P12Password ?? _settings.Data.P12Password);
+                        // 始终用当前 settings 中最新的证书/描述文件，注册表里的路径可能是旧证书（已被吊销）
+                        var p12Path = _settings.Data.P12Path;
+                        var provisionPath = _settings.Data.MobileProvisionPath;
+                        var p12Password = SigningService.ResolveP12Password(p12Path, _settings.Data.P12Password);
                         var options = new SigningService.SigningOptions
                         {
                             P12Path = p12Path,
                             P12Password = p12Password,
-                            MobileProvisionPath = app.ProvisionPath ?? _settings.Data.MobileProvisionPath
+                            MobileProvisionPath = provisionPath
                         };
 
                         var signedIpa = await _signing.SignIpaAsync(app.CachedIpaPath, outputIpa, options);
                         LogService.Info($"  签名完成，正在安装...");
 
                         await Task.Run(() => _devices.InstallIpa(device.Udid, signedIpa));
+                        // 刷新成功后同步更新注册表中的证书/描述文件路径
+                        _registry.UpdatePaths(app.BundleId, device.Udid, p12Path, p12Password, provisionPath);
                         _registry.MarkRefreshed(app.BundleId, device.Udid);
 
                         LogService.Success($"  刷新成功: {app.AppName}");

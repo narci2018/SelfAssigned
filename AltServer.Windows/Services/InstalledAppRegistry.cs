@@ -88,6 +88,21 @@ public class InstalledAppRegistry
         }
     }
 
+    /// <summary>更新注册表中的证书/描述文件路径（重新授权后同步最新路径）</summary>
+    public void UpdatePaths(string bundleId, string deviceUdid, string p12Path, string? p12Password, string provisionPath)
+    {
+        var entry = _registry.InstalledApps.FirstOrDefault(
+            a => a.BundleId == bundleId && a.DeviceUdid == deviceUdid);
+        if (entry is not null)
+        {
+            entry.P12Path = p12Path;
+            entry.P12Password = p12Password;
+            entry.ProvisionPath = provisionPath;
+            entry.Expiry = SigningService.ParseProvisionExpiry(provisionPath);
+            Save();
+        }
+    }
+
     /// <summary>移除已卸载的应用记录</summary>
     public void Unregister(string bundleId, string deviceUdid)
     {

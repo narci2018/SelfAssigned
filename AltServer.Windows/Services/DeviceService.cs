@@ -135,18 +135,19 @@ public class DeviceService
     {
         try
         {
-            // 直接尝试安装（不提前破坏已有配对会话）
+            // 直接尝试安装（优先带 -u 指定设备）
             RunTool("ideviceinstaller", $"-u {udid} -i \"{ipaPath}\"", timeoutMs: 300_000);
             return;
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("lockdownd", StringComparison.OrdinalIgnoreCase) ||
                                                  ex.Message.Contains("Could not connect", StringComparison.OrdinalIgnoreCase))
         {
-            LogService.Warning($"[Install] 首次连接 lockdownd 遇到波动，尝试自动重新配对并重试...");
+            LogService.Warning($"[Install] 首次连接 lockdownd 遇到波动，尝试清理旧配对并重新握手...");
 
-            // 自动恢复：执行一次重新配对握手
+            // 自动恢复：先 unpair 清理可能已损坏的旧配对缓存，再重新 pair 生成合法密钥对
             try
             {
+                RunToolNoThrow("idevicepair", $"-u {udid} unpair", timeoutMs: 8_000);
                 var pairOut = RunToolNoThrow("idevicepair", $"-u {udid} pair", timeoutMs: 15_000);
                 LogService.Info($"[Install] 重新配对: {pairOut.Trim().Split('\n')[0]}");
             }
@@ -155,22 +156,37 @@ public class DeviceService
             // 关键：配对握手后必须休眠 2.5 秒，给设备端 lockdownd 守护进程重启和重载证书的时间
             System.Threading.Thread.Sleep(2500);
 
-            // 再次尝试安装
+            // 重试步骤 1：再次尝试带 -u 安装
             try
             {
                 RunTool("ideviceinstaller", $"-u {udid} -i \"{ipaPath}\"", timeoutMs: 300_000);
                 return;
             }
-            catch (Exception retryEx)
+            catch (Exception)
             {
-                throw new InvalidOperationException(
-                    "无法连接到设备守护进程（lockdownd）。\n" +
-                    "排查建议：\n" +
-                    "  1. 请检查设备屏幕已点亮并在主屏幕（必须解锁且不能锁屏）\n" +
-                    "  2. 设备若弹出「信任此电脑」，请点击「信任」并【必须在设备上输入锁屏密码】\n" +
-                    "  3. 请彻底退出可能占用设备通信的后台软件（如 iTunes、爱思助手、3uTools）\n" +
-                    "  4. 尝试拔掉 USB 数据线，等待 3 秒后重新插上电脑\n" +
-                    $"（原始错误: {retryEx.Message}）", retryEx);
+                // 重试步骤 2：部分设备/工具在单连接时对 -u 参数敏感，尝试不带 -u 的单设备通道
+                try
+                {
+                    LogService.Info("[Install] 尝试默认单设备通道安装...");
+                    RunTool("ideviceinstaller", $"-i \"{ipaPath}\"", timeoutMs: 300_000);
+                    return;
+                }
+                catch (Exception retryEx)
+                {
+                    // 诊断：抓取 ideviceinfo 详细调试信息以供排查
+                    var diag = RunToolNoThrow("ideviceinfo", $"-u {udid}", timeoutMs: 5_000);
+                    var diagSummary = string.IsNullOrWhiteSpace(diag) ? "无响应" : diag.Trim().Split('\n')[0];
+
+                    throw new InvalidOperationException(
+                        "无法连接到设备守护进程（lockdownd）。\n" +
+                        $"设备状态诊断: {diagSummary}\n" +
+                        "排查建议：\n" +
+                        "  1. 请检查设备屏幕已点亮并在主屏幕（必须解锁且不能锁屏）\n" +
+                        "  2. 设备若弹出「信任此电脑」，请点击「信任」并【必须在设备上输入锁屏密码】\n" +
+                        "  3. 请彻底退出可能占用设备通信的后台软件（如 iTunes、爱思助手、3uTools）\n" +
+                        "  4. 尝试拔掉 USB 数据线，等待 3 秒后重新插上电脑\n" +
+                        $"（原始错误: {retryEx.Message}）", retryEx);
+                }
             }
         }
     }
@@ -281,15 +297,8 @@ public class DeviceService
 
     // MARK: - 工具执行
 
-    private string RunTool(string toolName, string arguments, int timeoutMs)
+    private ProcessStartInfo CreateToolStartInfo(string toolPath, string arguments)
     {
-        var toolPath = Path.Combine(_toolsDir, $"{toolName}.exe");
-
-        if (!File.Exists(toolPath))
-        {
-            throw new FileNotFoundException($"未找到工具: {toolName}.exe。请将 libimobiledevice 工具放入 {_toolsDir}", toolPath);
-        }
-
         var psi = new ProcessStartInfo
         {
             FileName = toolPath,
@@ -299,8 +308,32 @@ public class DeviceService
             RedirectStandardError = true,
             CreateNoWindow = true,
             StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
+            StandardErrorEncoding = Encoding.UTF8,
+            WorkingDirectory = _toolsDir
         };
+
+        // 优先从工具目录搜索关联 DLL（imobiledevice/usbmuxd/plist/crypto/ssl）
+        var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
+        psi.EnvironmentVariables["PATH"] = $"{_toolsDir};{pathEnv}";
+
+        // 降低 OpenSSL 安全检查级别：旧设备（如 iOS 15 的 iPad mini 4）的 lockdownd 证书可能采用旧式加密套件，
+        // OpenSSL 3.x 默认级别 SECLEVEL=2 会直接拒绝握手，需允许 SECLEVEL=0 以兼容
+        psi.EnvironmentVariables["OPENSSL_CIPHER_LIST"] = "DEFAULT:@SECLEVEL=0";
+        psi.EnvironmentVariables["OPENSSL_SECLEVEL"] = "0";
+
+        return psi;
+    }
+
+    private string RunTool(string toolName, string arguments, int timeoutMs)
+    {
+        var toolPath = Path.Combine(_toolsDir, $"{toolName}.exe");
+
+        if (!File.Exists(toolPath))
+        {
+            throw new FileNotFoundException($"未找到工具: {toolName}.exe。请将 libimobiledevice 工具放入 {_toolsDir}", toolPath);
+        }
+
+        var psi = CreateToolStartInfo(toolPath, arguments);
 
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException($"无法启动进程 {toolName}.exe");
@@ -338,17 +371,7 @@ public class DeviceService
             throw new FileNotFoundException($"未找到工具: {toolName}.exe。请将 libimobiledevice 工具放入 {_toolsDir}", toolPath);
         }
 
-        var psi = new ProcessStartInfo
-        {
-            FileName = toolPath,
-            Arguments = arguments,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
-        };
+        var psi = CreateToolStartInfo(toolPath, arguments);
 
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException($"无法启动进程 {toolName}.exe");

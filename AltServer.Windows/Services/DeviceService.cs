@@ -102,44 +102,27 @@ public class DeviceService
     }
 
     /// <summary>
-    /// 验证 lockdownd 连接是否正常。validate 失败时自动尝试重新 pair（处理签名期间设备锁屏的情况）。
+    /// 安装前尝试确认连接状态。validate 不可靠（部分 iPad 型号始终失败），
+    /// 此处仅做诊断日志，不阻断安装流程。
     /// </summary>
     private void ValidateLockdownOrThrow(string udid)
     {
         try
         {
-            if (IsValidated(udid)) return;
-
-            // validate 失败（如签名期间 iPad 锁屏导致信任失效），自动重新 pair 一次
-            LogService.Info($"[Install] 连接状态失效，尝试重新配对设备 {udid[..8]}...");
-            var pairOut = RunToolNoThrow("idevicepair", $"-u {udid} pair", timeoutMs: 20_000);
-            if (!pairOut.Contains("SUCCESS", StringComparison.OrdinalIgnoreCase))
+            // 仅做一次快速 validate，结果只用于日志，不阻断安装
+            var result = RunToolNoThrow("idevicepair", $"-u {udid} validate", timeoutMs: 8_000);
+            if (!result.Contains("SUCCESS", StringComparison.OrdinalIgnoreCase))
             {
-                throw new InvalidOperationException(
-                    "设备连接验证失败：请确认设备屏幕已亮着且已在弹框中点击「信任此电脑」。\n" +
-                    "提示：签名期间请保持设备屏幕常亮（临时关闭自动锁屏）。\n" +
-                    $"（pair 输出: {pairOut.Trim()}）");
+                // 尝试重新 pair（处理签名期间 iPad 锁屏导致信任失效的情况）
+                var pairOut = RunToolNoThrow("idevicepair", $"-u {udid} pair", timeoutMs: 15_000);
+                LogService.Info($"[Install] 重新配对结果: {pairOut.Trim().Split('\n')[0]}");
+                // 不再阻断：即使 validate/pair 输出异常，也继续尝试安装
+                // ideviceinstaller 会给出真正的安装结果
             }
-
-            // 重新 pair 后再 validate 一次确认
-            if (!IsValidated(udid))
-            {
-                throw new InvalidOperationException(
-                    "重新配对后仍无法验证连接，请拔插 USB 线后重试。");
-            }
-        }
-        catch (TimeoutException)
-        {
-            throw new InvalidOperationException(
-                "设备连接超时：请检查 USB 连接是否稳定，设备屏幕是否亮着且已解锁。");
-        }
-        catch (InvalidOperationException)
-        {
-            throw;
         }
         catch (Exception ex)
         {
-            LogService.Warning($"[Install] 前置连接验证跳过: {ex.Message}");
+            LogService.Warning($"[Install] 连接预检查跳过 ({ex.Message})，继续安装...");
         }
     }
 

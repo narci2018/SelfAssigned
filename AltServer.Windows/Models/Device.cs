@@ -78,6 +78,7 @@ public class Device : INotifyPropertyChanged
             if (!string.IsNullOrWhiteSpace(ProductType)) return $"{ProductType} ({shortUdid})";
             return $"iOS设备 ({shortUdid})";
         }
+        set { } // WPF Run.Text 默认按 TwoWay 绑定，需提供 setter 避免 XamlParseException
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

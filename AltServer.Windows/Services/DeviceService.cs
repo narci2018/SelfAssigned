@@ -47,11 +47,21 @@ public class DeviceService
 
             try
             {
-                device.Name = RunTool("ideviceinfo", $"-u {udid} -k DeviceName", timeoutMs: 10_000).Trim();
-                device.Model = RunTool("ideviceinfo", $"-u {udid} -k ModelNumber", timeoutMs: 10_000).Trim();
-                device.ProductType = RunTool("ideviceinfo", $"-u {udid} -k ProductType", timeoutMs: 10_000).Trim();
-                device.OsVersion = RunTool("ideviceinfo", $"-u {udid} -k ProductVersion", timeoutMs: 10_000).Trim();
-                device.Serial = RunTool("ideviceinfo", $"-u {udid} -k SerialNumber", timeoutMs: 10_000).Trim();
+                var name = RunTool("ideviceinfo", $"-u {udid} -k DeviceName", timeoutMs: 10_000).Trim();
+                if (IsValidInfoValue(name)) device.Name = name;
+
+                var model = RunTool("ideviceinfo", $"-u {udid} -k ModelNumber", timeoutMs: 10_000).Trim();
+                if (IsValidInfoValue(model)) device.Model = model;
+
+                var product = RunTool("ideviceinfo", $"-u {udid} -k ProductType", timeoutMs: 10_000).Trim();
+                if (IsValidInfoValue(product)) device.ProductType = product;
+
+                var os = RunTool("ideviceinfo", $"-u {udid} -k ProductVersion", timeoutMs: 10_000).Trim();
+                if (IsValidInfoValue(os)) device.OsVersion = os;
+
+                var serial = RunTool("ideviceinfo", $"-u {udid} -k SerialNumber", timeoutMs: 10_000).Trim();
+                if (IsValidInfoValue(serial)) device.Serial = serial;
+
                 device.IsPaired = IsPaired(udid);
             }
             catch
@@ -60,18 +70,20 @@ public class DeviceService
                 try
                 {
                     var product = RunToolNoThrow("ideviceinfo", $"-u {udid} -s -k ProductType", timeoutMs: 5_000).Trim();
-                    if (!string.IsNullOrWhiteSpace(product)) device.ProductType = product;
+                    if (IsValidInfoValue(product)) device.ProductType = product;
 
                     var os = RunToolNoThrow("ideviceinfo", $"-u {udid} -s -k ProductVersion", timeoutMs: 5_000).Trim();
-                    if (!string.IsNullOrWhiteSpace(os)) device.OsVersion = os;
+                    if (IsValidInfoValue(os)) device.OsVersion = os;
                 }
                 catch { }
             }
 
             // 无论如何保证有一个非空的识别名称
-            if (string.IsNullOrWhiteSpace(device.Name))
+            if (string.IsNullOrWhiteSpace(device.Name) || !IsValidInfoValue(device.Name))
             {
-                device.Name = device.DisplayName;
+                device.Name = !string.IsNullOrWhiteSpace(device.ProductType) && IsValidInfoValue(device.ProductType)
+                    ? device.ProductType
+                    : device.Udid[..Math.Min(8, device.Udid.Length)];
             }
 
             devices.Add(device);
@@ -80,34 +92,73 @@ public class DeviceService
         return devices;
     }
 
+    /// <summary>检查输出是否为合法的设备属性值（过滤掉底层报错信息）</summary>
+    private static bool IsValidInfoValue(string? val)
+    {
+        if (string.IsNullOrWhiteSpace(val)) return false;
+        if (val.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase)) return false;
+        if (val.Contains("Could not connect", StringComparison.OrdinalIgnoreCase)) return false;
+        if (val.Contains("lockdown", StringComparison.OrdinalIgnoreCase)) return false;
+        if (val.Contains("HostID", StringComparison.OrdinalIgnoreCase)) return false;
+        return true;
+    }
+
+    /// <summary>删除指定设备的本地配对记录文件，强制触发全新配对握手（解决 Invalid HostID -21）</summary>
+    public static void DeletePairRecord(string udid)
+    {
+        var paths = new[]
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Apple", "Lockdown", $"{udid}.plist"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Apple Computer", "Lockdown", $"{udid}.plist"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "libimobiledevice", $"{udid}.plist"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "libimobiledevice", $"{udid}.plist")
+        };
+
+        foreach (var path in paths)
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                    LogService.Info($"[Pair] 已清理旧配对记录文件: {path}");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogService.Warning($"[Pair] 清理配对文件失败 {path}: {ex.Message}");
+            }
+        }
+    }
+
     /// <summary>配对成功后刷新并补全设备详细信息（设备名、型号、系统版本）</summary>
     public void RefreshDeviceInfo(Device device)
     {
         try
         {
             var name = RunToolNoThrow("ideviceinfo", $"-u {device.Udid} -k DeviceName", timeoutMs: 8_000).Trim();
-            if (!string.IsNullOrWhiteSpace(name)) device.Name = name;
+            if (IsValidInfoValue(name)) device.Name = name;
 
             var model = RunToolNoThrow("ideviceinfo", $"-u {device.Udid} -k ModelNumber", timeoutMs: 8_000).Trim();
-            if (!string.IsNullOrWhiteSpace(model)) device.Model = model;
+            if (IsValidInfoValue(model)) device.Model = model;
 
             var product = RunToolNoThrow("ideviceinfo", $"-u {device.Udid} -k ProductType", timeoutMs: 8_000).Trim();
-            if (!string.IsNullOrWhiteSpace(product)) device.ProductType = product;
+            if (IsValidInfoValue(product)) device.ProductType = product;
 
             var os = RunToolNoThrow("ideviceinfo", $"-u {device.Udid} -k ProductVersion", timeoutMs: 8_000).Trim();
-            if (!string.IsNullOrWhiteSpace(os)) device.OsVersion = os;
+            if (IsValidInfoValue(os)) device.OsVersion = os;
 
             device.IsPaired = IsPaired(device.Udid);
         }
         catch { }
     }
 
-    /// <summary>检查设备是否已配对</summary>
+    /// <summary>检查设备是否已配对且会话有效</summary>
     public bool IsPaired(string udid)
     {
         try
         {
-            var output = RunTool("idevicepair", $"-u {udid} validate", timeoutMs: 10_000);
+            var output = RunToolNoThrow("idevicepair", $"-u {udid} validate", timeoutMs: 8_000);
             return output.Contains("SUCCESS", StringComparison.OrdinalIgnoreCase);
         }
         catch
@@ -116,24 +167,60 @@ public class DeviceService
         }
     }
 
-    /// <summary>配对设备（需要在设备上点击“信任此电脑”）</summary>
+    /// <summary>配对设备（清理失效记录，并在设备上点击“信任此电脑”）</summary>
     public bool Pair(string udid)
     {
         try
         {
             EnsureLockdownDirectoryAccess();
-            var output = RunTool("idevicepair", $"-u {udid} pair", timeoutMs: 30_000);
-            var ok = output.Contains("SUCCESS", StringComparison.OrdinalIgnoreCase);
-            if (ok)
+
+            // 1. 若当前会话已经完全通过 validate 检验，直接返回成功
+            if (IsPaired(udid))
             {
-                var recordPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Apple", "Lockdown", $"{udid}.plist");
-                var exists = File.Exists(recordPath);
-                LogService.Info($"[Pair] 配对证书文件 {(exists ? "写入成功" : "待系统刷新")}: {recordPath}");
+                LogService.Info($"[Pair] 设备 {udid[..Math.Min(8, udid.Length)]} 配对会话有效");
+                return true;
             }
-            return ok;
+
+            // 2. 当前配对无效或失效（如 Invalid HostID），彻底删除本地旧配对记录以迫使设备重新协商
+            DeletePairRecord(udid);
+
+            // 3. 循环发起配对，等待用户在设备上点击“信任”并输入密码（最多等待 30 秒）
+            LogService.Info($"[Pair] 正在请求配对，请在设备屏幕上点击「信任此电脑」并输入锁屏密码...");
+
+            var sw = Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < 30_000)
+            {
+                var output = RunToolNoThrow("idevicepair", $"-u {udid} pair", timeoutMs: 8_000);
+
+                if (output.Contains("SUCCESS", StringComparison.OrdinalIgnoreCase))
+                {
+                    // 配对握手成功后稍候 1 秒，使用 validate 再次确认 lockdownd session 是否通畅
+                    System.Threading.Thread.Sleep(1000);
+                    if (IsPaired(udid))
+                    {
+                        var recordPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Apple", "Lockdown", $"{udid}.plist");
+                        var exists = File.Exists(recordPath);
+                        LogService.Success($"[Pair] 设备配对成功！证书记录: {(exists ? recordPath : "已保存")}");
+                        return true;
+                    }
+                }
+
+                if (output.Contains("denied", StringComparison.OrdinalIgnoreCase) ||
+                    output.Contains("refused", StringComparison.OrdinalIgnoreCase))
+                {
+                    LogService.Warning("[Pair] 用户在设备上点击了「不信任」");
+                    return false;
+                }
+
+                // 设备锁屏或等待用户点击“信任”，稍候 2 秒重试
+                System.Threading.Thread.Sleep(2000);
+            }
+
+            return IsPaired(udid);
         }
-        catch
+        catch (Exception ex)
         {
+            LogService.Warning($"配对异常: {ex.Message}");
             return false;
         }
     }
@@ -155,45 +242,81 @@ public class DeviceService
     /// <summary>安装IPA应用，具备 lockdownd 连接重试与自动恢复机制</summary>
     public void InstallIpa(string udid, string ipaPath)
     {
+        // 安装前：预热 lockdownd 连接——先用轻量级 ideviceinfo 查询唤醒守护进程
+        // 旧设备（iPad Air 2 等）的 lockdownd 在签名期间可能进入休眠，需要先激活
+        WarmUpLockdownConnection(udid);
+
         try
         {
+            // 安装前若发现配对会话失效，先执行自动重配对
+            if (!IsPaired(udid))
+            {
+                LogService.Warning($"[Install] 检测到设备配对状态失效，正在尝试自动重新握手...");
+                Pair(udid);
+                // 配对后必须等待 lockdownd 重新加载证书
+                System.Threading.Thread.Sleep(3000);
+                WarmUpLockdownConnection(udid);
+            }
+
             // 直接尝试安装（优先带 -u 指定设备）
             RunTool("ideviceinstaller", $"-u {udid} -i \"{ipaPath}\"", timeoutMs: 300_000);
             return;
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("lockdownd", StringComparison.OrdinalIgnoreCase) ||
-                                                 ex.Message.Contains("Could not connect", StringComparison.OrdinalIgnoreCase))
+                                                 ex.Message.Contains("Could not connect", StringComparison.OrdinalIgnoreCase) ||
+                                                 ex.Message.Contains("HostID", StringComparison.OrdinalIgnoreCase))
         {
             LogService.Warning($"[Install] 首次连接 lockdownd 遇到波动，尝试清理旧配对并重新握手...");
 
-            // 自动恢复：先 unpair 清理可能已损坏的旧配对缓存，再重新 pair 生成合法密钥对
+            // 自动恢复：先清理本地失效的旧配对文件，再重新 pair 生成合法密钥对
             try
             {
-                RunToolNoThrow("idevicepair", $"-u {udid} unpair", timeoutMs: 8_000);
-                var pairOut = RunToolNoThrow("idevicepair", $"-u {udid} pair", timeoutMs: 15_000);
-                LogService.Info($"[Install] 重新配对: {pairOut.Trim().Split('\n')[0]}");
+                DeletePairRecord(udid);
+                RunToolNoThrow("idevicepair", $"-u {udid} unpair", timeoutMs: 5_000);
+                System.Threading.Thread.Sleep(1000);
+
+                var paired = Pair(udid);
+                LogService.Info($"[Install] 重新配对: {(paired ? "SUCCESS" : "FAILED")}");
+
+                if (!paired)
+                {
+                    throw new InvalidOperationException("重新配对失败，无法安装。请在设备上点击「信任此电脑」并输入密码。");
+                }
             }
+            catch (InvalidOperationException) { throw; }
             catch { }
 
-            // 关键：配对握手后必须休眠 2.5 秒，给设备端 lockdownd 守护进程重启和重载证书的时间
-            System.Threading.Thread.Sleep(2500);
+            // 关键：配对握手后必须休眠足够时间，给设备端 lockdownd 守护进程重启和重载证书的时间
+            // 旧设备（iPad5,1 等）需要更长的等待时间
+            System.Threading.Thread.Sleep(4000);
 
-            // 重试步骤 1：再次尝试带 -u 安装
+            // 预热：确认 lockdownd 已就绪后再安装
+            if (!WarmUpLockdownConnection(udid))
+            {
+                // lockdownd 预热失败，再等 3 秒重试一次
+                LogService.Warning("[Install] lockdownd 预热失败，等待后重试...");
+                System.Threading.Thread.Sleep(3000);
+                WarmUpLockdownConnection(udid);
+            }
+
+            // 重试安装（始终带 -u 精确指定目标设备，避免 usbmuxd 误选设备）
             try
             {
+                LogService.Info("[Install] 尝试默认单设备通道安装...");
                 RunTool("ideviceinstaller", $"-u {udid} -i \"{ipaPath}\"", timeoutMs: 300_000);
                 return;
             }
-            catch (Exception)
+            catch (Exception retryEx1)
             {
-                // 重试步骤 2：部分设备/工具在单连接时对 -u 参数敏感，尝试不带 -u 的单设备通道
+                // 最后一次尝试：不带 -u（兼容某些 ideviceinstaller 版本的 bug）
                 try
                 {
-                    LogService.Info("[Install] 尝试默认单设备通道安装...");
+                    LogService.Info("[Install] 尝试不指定设备的兜底安装...");
+                    System.Threading.Thread.Sleep(2000);
                     RunTool("ideviceinstaller", $"-i \"{ipaPath}\"", timeoutMs: 300_000);
                     return;
                 }
-                catch (Exception retryEx)
+                catch (Exception retryEx2)
                 {
                     // 诊断：抓取 ideviceinfo -d 详细调试信息以供排查
                     var diag = RunToolNoThrow("ideviceinfo", $"-u {udid} -d", timeoutMs: 8_000);
@@ -202,16 +325,34 @@ public class DeviceService
 
                     throw new InvalidOperationException(
                         "无法连接到设备守护进程（lockdownd）。\n" +
-                        $"设备底层诊断: {diagSummary}\n" +
+                        $"设备状态诊断: {diagSummary}\n" +
                         "排查建议：\n" +
                         "  1. 请检查设备屏幕已点亮并在主屏幕（必须解锁且不能锁屏）\n" +
                         "  2. 设备若弹出「信任此电脑」，请点击「信任」并【必须在设备上输入锁屏密码】\n" +
                         "  3. 请检查设备系统时间是否准确（时间偏差过大会导致 SSL 握手拒绝）\n" +
                         "  4. 请彻底退出可能占用设备通信的后台软件（如 iTunes、爱思助手、3uTools）\n" +
                         "  5. 尝试拔掉 USB 数据线，等待 3 秒后重新插上电脑\n" +
-                        $"（原始错误: {retryEx.Message}）", retryEx);
+                        $"（原始错误: {retryEx2.Message}）", retryEx2);
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// 预热 lockdownd 连接：使用轻量级 ideviceinfo 查询唤醒设备端守护进程。
+    /// 旧设备在长时间未通信后 lockdownd 会话可能关闭，需要先发起一次查询激活。
+    /// 返回 true 表示连接可用。
+    /// </summary>
+    private bool WarmUpLockdownConnection(string udid)
+    {
+        try
+        {
+            var result = RunToolNoThrow("ideviceinfo", $"-u {udid} -k ProductType", timeoutMs: 10_000).Trim();
+            return IsValidInfoValue(result);
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -340,10 +481,18 @@ public class DeviceService
         var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
         psi.EnvironmentVariables["PATH"] = $"{_toolsDir};{pathEnv}";
 
-        // 降低 OpenSSL 安全检查级别：旧设备（如 iOS 15 的 iPad mini 4）的 lockdownd 证书可能采用旧式加密套件，
-        // OpenSSL 3.x 默认级别 SECLEVEL=2 会直接拒绝握手，需允许 SECLEVEL=0 以兼容
-        psi.EnvironmentVariables["OPENSSL_CIPHER_LIST"] = "DEFAULT:@SECLEVEL=0";
+        // 降低 OpenSSL 安全检查级别：旧设备（如 iOS 15 的 iPad mini 4 / iPad Air 2）的 lockdownd
+        // 证书可能采用旧式加密套件或短密钥，OpenSSL 3.x 会直接拒绝握手
+        psi.EnvironmentVariables["OPENSSL_CIPHER_LIST"] = "ALL:@SECLEVEL=0";
         psi.EnvironmentVariables["OPENSSL_SECLEVEL"] = "0";
+
+        // 禁用 OpenSSL 默认配置文件加载：某些 Windows 发行版的 openssl.cnf 会强制加载 provider
+        // 或设置安全策略，导致与旧设备握手失败。设为空值可跳过配置加载。
+        psi.EnvironmentVariables["OPENSSL_CONF"] = "";
+
+        // 允许 OpenSSL 3.x 加载 legacy provider（支持旧设备使用的 RC4、MD5 等算法）
+        psi.EnvironmentVariables["OPENSSL_MODULES"] = _toolsDir;
+        psi.EnvironmentVariables["OPENSSL_LEGACY"] = "1";
 
         return psi;
     }

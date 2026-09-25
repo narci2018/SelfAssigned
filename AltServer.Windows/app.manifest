@@ -5,8 +5,8 @@
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
     <security>
       <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
-        <!-- UAC 设置：改为 asInvoker 无需管理员权限 -->
-        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+        <!-- 必须使用管理员权限运行：以确保拥有读写系统受保护目录（C:\ProgramData\Apple\Lockdown 配对记录）的权限 -->
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
       </requestedPrivileges>
     </security>
   </trustInfo>

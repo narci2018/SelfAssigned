@@ -121,13 +121,35 @@ public class DeviceService
     {
         try
         {
+            EnsureLockdownDirectoryAccess();
             var output = RunTool("idevicepair", $"-u {udid} pair", timeoutMs: 30_000);
-            return output.Contains("SUCCESS", StringComparison.OrdinalIgnoreCase);
+            var ok = output.Contains("SUCCESS", StringComparison.OrdinalIgnoreCase);
+            if (ok)
+            {
+                var recordPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Apple", "Lockdown", $"{udid}.plist");
+                var exists = File.Exists(recordPath);
+                LogService.Info($"[Pair] 配对证书文件 {(exists ? "写入成功" : "待系统刷新")}: {recordPath}");
+            }
+            return ok;
         }
         catch
         {
             return false;
         }
+    }
+
+    /// <summary>确保系统级配对目录存在且拥有读写访问权</summary>
+    private static void EnsureLockdownDirectoryAccess()
+    {
+        try
+        {
+            var lockdownDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Apple", "Lockdown");
+            if (!Directory.Exists(lockdownDir))
+            {
+                Directory.CreateDirectory(lockdownDir);
+            }
+        }
+        catch { }
     }
 
     /// <summary>安装IPA应用，具备 lockdownd 连接重试与自动恢复机制</summary>

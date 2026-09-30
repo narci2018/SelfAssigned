@@ -23,6 +23,7 @@ public class MainViewModel : ObservableObject
     private readonly SigningDiscoveryService _discovery;
     private readonly InstalledAppRegistry _registry;
     private readonly HttpServer _server;
+    private readonly IpaLibraryService _ipaLibrary;
 
     private bool _isServerRunning;
     private bool _isRefreshing;
@@ -34,6 +35,19 @@ public class MainViewModel : ObservableObject
 
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _devicePollTimer;
+    private readonly DispatcherTimer _expiryCheckTimer;
+
+    /// <summary>签名/描述文件过期提醒：剩余天数 ≤ 该值时提醒（托盘气泡 + 日志）</summary>
+    public const int ExpiryRemindWithinDays = 3;
+
+    /// <summary>检测到签名即将过期/已过期时触发（参数为提醒文案），UI 层用于托盘气泡</summary>
+    public event Action<string>? ExpiryReminderDetected;
+
+    private DateTime _lastRemindUtc = DateTime.MinValue;
+    private readonly Dictionary<string, DateTime> _lastAutoProvisionAttemptUtc = new();
+
+    /// <summary>自动续期时使用的默认 App ID（与登录向导一致）</summary>
+    private const string FallbackProvisionBundleId = "com.selfassigned.altserver";
 
     public MainViewModel()
     {
@@ -44,6 +58,7 @@ public class MainViewModel : ObservableObject
         var appDataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AltServer");
         Directory.CreateDirectory(appDataDir);
         _registry = new InstalledAppRegistry(appDataDir);
+        _ipaLibrary = new IpaLibraryService();
 
         Devices = new ObservableCollection<Device>();
         InstalledApps = new ObservableCollection<InstalledApp>();
@@ -70,6 +85,13 @@ public class MainViewModel : ObservableObject
 
         _devicePollTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         _devicePollTimer.Tick += (_, _) => PollDevices();
+
+        // 过期提醒巡检：每小时检查一次（托盘气泡 24 小时内只弹一次）
+        _expiryCheckTimer = new DispatcherTimer { Interval = TimeSpan.FromHours(1) };
+        _expiryCheckTimer.Tick += (_, _) => CheckExpiryAndRemind();
+
+        RefreshAccountsView();
+        RefreshIpaLibraryView();
     }
 
     public ObservableCollection<Device> Devices { get; }
@@ -77,6 +99,26 @@ public class MainViewModel : ObservableObject
     public ObservableCollection<string> LogEntries { get; }
     public ObservableCollection<CertificateItem> AvailableCertificates { get; } = new();
     public ObservableCollection<ProvisionItem> AvailableProvisions { get; } = new();
+
+    /// <summary>多账号列表（v1.0.86）</summary>
+    public ObservableCollection<AccountDisplayItem> Accounts { get; } = new();
+
+    /// <summary>IPA 库（v1.0.86）</summary>
+    public ObservableCollection<IpaLibraryItem> IpaLibrary { get; } = new();
+
+    private AccountDisplayItem? _selectedAccount;
+    public AccountDisplayItem? SelectedAccount
+    {
+        get => _selectedAccount;
+        set => SetField(ref _selectedAccount, value);
+    }
+
+    private IpaLibraryItem? _selectedIpa;
+    public IpaLibraryItem? SelectedIpa
+    {
+        get => _selectedIpa;
+        set => SetField(ref _selectedIpa, value);
+    }
 
     private string _logText = string.Empty;
     public string LogText
@@ -258,6 +300,276 @@ public class MainViewModel : ObservableObject
         }
     }
 
+    // MARK: - 多账号管理（v1.0.86）
+
+    public string AccountSummaryText =>
+        Accounts.Count == 0
+            ? "未登录 Apple ID (点击右上角登录)"
+            : $"共 {Accounts.Count} 个账号，当前: {_settings.Data.ActiveAccount ?? "未设置"}";
+
+    /// <summary>从设置重建账号列表（界面展示层）</summary>
+    public void RefreshAccountsView()
+    {
+        var selected = SelectedAccount?.AppleId;
+        Accounts.Clear();
+        foreach (var acct in _settings.Data.Accounts)
+        {
+            var boundDevices = _settings.Data.DeviceAccounts.Count(kv =>
+                string.Equals(kv.Value, acct.AppleId, StringComparison.OrdinalIgnoreCase));
+            var daysRemaining = 0;
+            string expiryText;
+            if (acct.ProfileExpiry.HasValue)
+            {
+                daysRemaining = (int)Math.Floor((acct.ProfileExpiry.Value - DateTime.Now).TotalDays);
+                expiryText = daysRemaining > 0
+                    ? $"描述文件剩余 {daysRemaining} 天"
+                    : "描述文件已过期";
+            }
+            else
+            {
+                expiryText = "无签名材料";
+            }
+
+            Accounts.Add(new AccountDisplayItem
+            {
+                AppleId = acct.AppleId,
+                IsCurrent = string.Equals(_settings.Data.ActiveAccount, acct.AppleId, StringComparison.OrdinalIgnoreCase),
+                BoundDevices = boundDevices,
+                HasPassword = acct.HasPassword,
+                ExpiryText = expiryText,
+                DaysRemaining = daysRemaining
+            });
+        }
+
+        SelectedAccount = Accounts.FirstOrDefault(a => a.AppleId == selected) ?? Accounts.FirstOrDefault();
+        OnPropertyChanged(nameof(AccountSummaryText));
+        OnPropertyChanged(nameof(AppleIdDisplay));
+    }
+
+    /// <summary>设备列表上的"绑定账号"标签同步</summary>
+    public void UpdateDeviceAccountLabels()
+    {
+        foreach (var d in Devices)
+        {
+            d.AccountName = _settings.Data.GetAccountForDevice(d.Udid);
+        }
+    }
+
+    /// <summary>切换当前激活账号</summary>
+    public void SetActiveAccount(string appleId)
+    {
+        _settings.Data.SetActiveAccount(appleId);
+        _settings.Save();
+        LogService.Info($"当前账号已切换为 {appleId}");
+        RefreshAccountsView();
+        UpdateDeviceAccountLabels();
+    }
+
+    /// <summary>移除账号（解除设备绑定，签名文件保留在磁盘）</summary>
+    public void RemoveAccount(string appleId)
+    {
+        var unbound = _settings.Data.RemoveAccount(appleId);
+        _settings.Save();
+        LogService.Info(unbound.Count > 0
+            ? $"已移除账号 {appleId}，并解除 {unbound.Count} 台设备的绑定（签名文件保留）"
+            : $"已移除账号 {appleId}");
+        RefreshAccountsView();
+        UpdateDeviceAccountLabels();
+    }
+
+    // MARK: - IPA 库管理（v1.0.86）
+
+    public void RefreshIpaLibraryView()
+    {
+        IpaLibrary.Clear();
+        foreach (var item in _ipaLibrary.Items.OrderByDescending(i => i.AddedAt))
+        {
+            IpaLibrary.Add(item);
+        }
+    }
+
+    /// <summary>批量添加 IPA 到库，返回成功条数</summary>
+    public int AddIpaToLibrary(IEnumerable<string> files)
+    {
+        var added = 0;
+        foreach (var file in files)
+        {
+            var item = _ipaLibrary.Add(file);
+            if (item is not null)
+            {
+                added++;
+                var bundleTag = string.IsNullOrEmpty(item.BundleId) ? "" : $" · {item.BundleId}";
+                LogService.Success($"已添加到 IPA 库: {item.DisplayName} ({item.SizeText}){bundleTag}");
+            }
+        }
+        RefreshIpaLibraryView();
+        return added;
+    }
+
+    /// <summary>从库中移除 IPA（同时删除库内文件）</summary>
+    public bool RemoveIpaFromLibrary(IpaLibraryItem item)
+    {
+        var ok = _ipaLibrary.Remove(item.Id);
+        if (ok)
+        {
+            LogService.Info($"已从 IPA 库移除: {item.DisplayName}");
+            RefreshIpaLibraryView();
+        }
+        return ok;
+    }
+
+    /// <summary>获取库内 IPA 的可安装路径；文件丢失时返回 null</summary>
+    public string? GetLibraryIpaPath(IpaLibraryItem item)
+    {
+        var path = _ipaLibrary.GetPath(item);
+        return File.Exists(path) ? path : null;
+    }
+
+    // MARK: - 过期提醒（v1.0.86）
+
+    /// <summary>全局最早过期时间：账号描述文件 ∪ 各设备描述文件 ∪ 已安装应用记录</summary>
+    public DateTime? ComputeEarliestExpiry()
+    {
+        DateTime? earliest = _settings.Data.EarliestProfileExpiry();
+
+        foreach (var entry in _registry.GetInstalledApps(null))
+        {
+            if (entry.Expiry.HasValue && (earliest is null || entry.Expiry < earliest))
+                earliest = entry.Expiry;
+        }
+
+        foreach (var cfg in _settings.Data.DeviceConfigs.Values)
+        {
+            var expiry = SigningService.ParseProvisionExpiry(cfg.MobileProvisionPath);
+            if (expiry.HasValue && (earliest is null || expiry < earliest))
+                earliest = expiry;
+        }
+
+        return earliest;
+    }
+
+    /// <summary>状态栏"最早签名过期"摘要</summary>
+    public string ExpirySummaryText
+    {
+        get
+        {
+            var earliest = ComputeEarliestExpiry();
+            if (earliest is null) return "签名有效期: 未配置";
+            var days = (int)Math.Floor((earliest.Value - DateTime.Now).TotalDays);
+            return days > 0
+                ? $"最早签名过期: {earliest:yyyy-MM-dd} (剩余 {days} 天)"
+                : $"签名已过期 ({earliest:yyyy-MM-dd})";
+        }
+    }
+
+    /// <summary>过期巡检：写日志 + 触发托盘气泡（24 小时内最多弹一次）</summary>
+    public void CheckExpiryAndRemind()
+    {
+        OnPropertyChanged(nameof(ExpirySummaryText));
+        OnPropertyChanged(nameof(AccountSummaryText));
+
+        var earliest = ComputeEarliestExpiry();
+        if (earliest is null) return;
+
+        var days = (int)Math.Floor((earliest.Value - DateTime.Now).TotalDays);
+        if (days > ExpiryRemindWithinDays) return;
+
+        var message = days > 0
+            ? $"签名/描述文件将于 {days} 天后过期（{earliest:yyyy-MM-dd}）。已记住密码的账号会在设备连接后自动续期；否则请点击「登录 / 添加账号」重新配置。"
+            : $"签名/描述文件已过期（{earliest:yyyy-MM-dd}），应用将无法打开。请点击「登录 / 添加账号」重新配置。";
+
+        LogService.Warning(message);
+
+        if ((DateTime.UtcNow - _lastRemindUtc).TotalHours < 24) return;
+        _lastRemindUtc = DateTime.UtcNow;
+        ExpiryReminderDetected?.Invoke(message);
+    }
+
+    /// <summary>
+    /// 自动续期（登录持久化核心）：设备描述文件过期/将过期时，
+    /// 用该设备绑定账号的已存密码重新走 GSA 认证 + 自动申请证书描述文件。
+    /// 账号开启 2FA 时无法全自动，会给出手动登录提示。
+    /// </summary>
+    public async Task<bool> EnsureFreshProvisionAsync(Device device)
+    {
+        var udid = device.Udid;
+        var cfg = _settings.Data.GetDeviceConfig(udid);
+        var expiry = SigningService.ParseProvisionExpiry(cfg.MobileProvisionPath);
+        if (expiry.HasValue && expiry.Value > DateTime.Now.AddDays(1.5))
+        {
+            return true; // 描述文件仍有效
+        }
+
+        // 1 小时内失败过的设备不再反复尝试，避免刷爆日志/触发 Apple 限流
+        if (_lastAutoProvisionAttemptUtc.TryGetValue(udid, out var lastAttempt) &&
+            (DateTime.UtcNow - lastAttempt).TotalMinutes < 60)
+        {
+            return false;
+        }
+        _lastAutoProvisionAttemptUtc[udid] = DateTime.UtcNow;
+
+        var appleId = _settings.Data.GetAccountForDevice(udid) ?? _settings.Data.ActiveAccount;
+        var account = _settings.Data.FindAccount(appleId);
+        var password = account?.GetPassword();
+        if (account is null || string.IsNullOrEmpty(password))
+        {
+            LogService.Warning(
+                $"设备 {device.DisplayName} 的描述文件即将过期，但没有该账号的已存密码，无法自动续期。\n" +
+                "请点击「登录 / 添加账号」并勾选记住密码，下次即可自动续期。");
+            return false;
+        }
+
+        try
+        {
+            LogService.Info($"描述文件已过期/即将过期，正在用保存的账号 {account.AppleId} 自动续期...");
+
+            var dataDir = AppContext.BaseDirectory;
+            var gsa = new AppleGsaClient(_settings.ResolveToolsDir(), dataDir, _settings.Data.AnisetteUrl);
+            var auth = await gsa.AuthenticateAsync(account.AppleId, password);
+            if (auth.Status == AuthStatus.Error)
+            {
+                LogService.Error($"自动续期登录失败: {auth.Message}");
+                return false;
+            }
+            if (auth.Status == AuthStatus.Requires2FA)
+            {
+                LogService.Warning(
+                    $"账号 {account.AppleId} 开启了双重认证(2FA)，自动续期需要输入验证码。\n" +
+                    "请在界面点击「登录 / 添加账号」完成一次手动登录（只需输密码+验证码，无需重新申请证书）。");
+                CheckExpiryAndRemind();
+                return false;
+            }
+
+            var deviceName = string.IsNullOrWhiteSpace(device.Name)
+                ? $"MyDevice-{udid.Replace("-", "")[^8..]}"
+                : device.Name;
+            var provision = new AppleProvisionService(gsa, dataDir);
+            var result = await provision.AutoProvisionAsync(
+                FallbackProvisionBundleId, "AltServer", deviceName, udid);
+
+            if (!result.Success || string.IsNullOrEmpty(result.P12Path) || string.IsNullOrEmpty(result.ProvisionPath))
+            {
+                LogService.Error($"自动续期失败: {result.ErrorMessage}");
+                return false;
+            }
+
+            _settings.Data.SetDeviceConfig(udid, result.P12Path, "temp123", result.ProvisionPath);
+            account.LastLoginUtc = DateTime.UtcNow;
+            _settings.Save();
+            _lastAutoProvisionAttemptUtc.Remove(udid);
+
+            var newExpiry = SigningService.ParseProvisionExpiry(result.ProvisionPath);
+            LogService.Success($"描述文件已自动续期: {device.DisplayName}（有效期至 {newExpiry:yyyy-MM-dd HH:mm}）");
+            RefreshAccountsView();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            LogService.Error($"自动续期异常: {ex.Message}");
+            return false;
+        }
+    }
+
     // MARK: - 智能扫描
 
     public void ScanSigningConfig()
@@ -412,6 +724,18 @@ public class MainViewModel : ObservableObject
         }
 
         _devicePollTimer.Start();
+        _expiryCheckTimer.Start();
+
+        RefreshAccountsView();
+        RefreshIpaLibraryView();
+        UpdateDeviceAccountLabels();
+
+        // 启动 10 秒后做一次过期巡检（含托盘气泡提醒）；回调切回 UI 线程
+        _ = Task.Delay(10000).ContinueWith(_ =>
+        {
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher is not null) dispatcher.BeginInvoke(() => CheckExpiryAndRemind());
+        });
 
         // 开机自启动时最小化
         var args = Environment.GetCommandLineArgs();
@@ -427,6 +751,7 @@ public class MainViewModel : ObservableObject
     {
         _devicePollTimer.Stop();
         _refreshTimer.Stop();
+        _expiryCheckTimer.Stop();
         _server.Stop();
         IsServerRunning = false;
     }
@@ -476,27 +801,33 @@ public class MainViewModel : ObservableObject
             var devices = _devices.ListDevices();
 
             // 更新已有设备
-            foreach (var device in devices)
-            {
-                var existing = Devices.FirstOrDefault(d => d.Udid == device.Udid);
-                if (existing is null)
+                foreach (var device in devices)
                 {
-                    Devices.Add(device);
-                    LogService.Info($"检测到设备: {device.Name} ({device.Udid[..Math.Min(8, device.Udid.Length)]}...)");
+                    // 同步"绑定账号"标签（多账号管理）
+                    device.AccountName = _settings.Data.GetAccountForDevice(device.Udid);
 
-                    if (Devices.Count == 1)
+                    var existing = Devices.FirstOrDefault(d => d.Udid == device.Udid);
+                    if (existing is null)
                     {
-                        SelectedDevice = device;
+                        Devices.Add(device);
+                        var bound = _settings.Data.GetAccountForDevice(device.Udid);
+                        LogService.Info($"检测到设备: {device.Name} ({device.Udid[..Math.Min(8, device.Udid.Length)]}...)" +
+                                        (bound is null ? "" : $" [账号: {bound}]"));
+
+                        if (Devices.Count == 1)
+                        {
+                            SelectedDevice = device;
+                        }
+                    }
+                    else
+                    {
+                        existing.Name = device.Name;
+                        existing.Model = device.Model;
+                        existing.OsVersion = device.OsVersion;
+                        existing.IsPaired = device.IsPaired;
+                        existing.AccountName = device.AccountName;
                     }
                 }
-                else
-                {
-                    existing.Name = device.Name;
-                    existing.Model = device.Model;
-                    existing.OsVersion = device.OsVersion;
-                    existing.IsPaired = device.IsPaired;
-                }
-            }
 
             // 移除断开设备
             var connectedUdids = devices.Select(d => d.Udid).ToHashSet();
@@ -761,7 +1092,16 @@ public class MainViewModel : ObservableObject
                 _settings.Data.MobileProvisionPath,
                 p12Password);
 
+            // 若本次安装的 IPA 来自库，回填 BundleId 与最近签名时间
+            var libItem = _ipaLibrary.Items.FirstOrDefault(i =>
+                string.Equals(_ipaLibrary.GetPath(i), ipaPath, StringComparison.OrdinalIgnoreCase));
+            if (libItem is not null)
+            {
+                _ipaLibrary.MarkSigned(libItem.Id, realBundleId);
+            }
+
             LoadDeviceApp();
+            CheckExpiryAndRemind();
             return true;
         }
         catch (Exception ex)
@@ -819,6 +1159,13 @@ public class MainViewModel : ObservableObject
             foreach (var device in devices)
             {
                 LogService.Info($"刷新设备: {device.Name}");
+
+                var hasApps = _registry.GetInstalledApps(device.Udid).Count > 0;
+                if (hasApps)
+                {
+                    // 登录持久化：描述文件过期/将过期时，用已保存的账号密码自动续期后再重签
+                    await EnsureFreshProvisionAsync(device);
+                }
 
                 var apps = _registry.GetInstalledApps(device.Udid);
                 LogService.Info($"  该设备有 {apps.Count} 个已安装应用");
@@ -879,6 +1226,7 @@ public class MainViewModel : ObservableObject
             }
 
             LogService.Success($"刷新完成: 成功 {refreshed} 个, 失败 {failed} 个");
+            CheckExpiryAndRemind();
         }
         catch (Exception ex)
         {
@@ -1088,4 +1436,27 @@ public class ProvisionItem
     public string DisplayName { get; set; } = string.Empty;
     public string Path { get; set; } = string.Empty;
     public DateTime Expiry { get; set; }
+}
+
+/// <summary>账号管理列表项（v1.0.86，界面展示层）</summary>
+public class AccountDisplayItem
+{
+    public string AppleId { get; set; } = string.Empty;
+    public bool IsCurrent { get; set; }
+    public int BoundDevices { get; set; }
+    public bool HasPassword { get; set; }
+    public string ExpiryText { get; set; } = string.Empty;
+    public int DaysRemaining { get; set; }
+
+    public string Display => IsCurrent ? $"{AppleId}（当前）" : AppleId;
+    public string Detail
+    {
+        get
+        {
+            var parts = new List<string> { ExpiryText, $"绑定 {BoundDevices} 台设备" };
+            if (HasPassword) parts.Add("已记住密码");
+            else parts.Add("未记住密码");
+            return string.Join(" · ", parts);
+        }
+    }
 }

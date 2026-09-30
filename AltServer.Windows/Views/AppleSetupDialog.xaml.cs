@@ -18,6 +18,8 @@ public partial class AppleSetupDialog : Window
     public string? ResultP12Password { get; private set; }
     public string? ResultAppleId { get; private set; }
 
+    private bool _rememberPassword = true;
+
     public AppleSetupDialog(string dataDir)
     {
         InitializeComponent();
@@ -26,7 +28,30 @@ public partial class AppleSetupDialog : Window
         try
         {
             var settings = new SettingsService();
-            if (!string.IsNullOrEmpty(settings.Data.AppleId))
+
+            // 预填账号：优先当前设备绑定账号，其次当前激活账号
+            var prefillAccount = settings.Data.ActiveAccount;
+            try
+            {
+                var devices = new DeviceService(settings.ResolveToolsDir()).ListDevices();
+                var boundId = devices.Count > 0 ? settings.Data.GetAccountForDevice(devices[0].Udid) : null;
+                if (!string.IsNullOrEmpty(boundId)) prefillAccount = boundId;
+            }
+            catch { }
+
+            var account = settings.Data.FindAccount(prefillAccount);
+            if (account is not null)
+            {
+                AppleIdBox.Text = account.AppleId;
+                var savedPwd = account.GetPassword();
+                if (!string.IsNullOrEmpty(savedPwd))
+                {
+                    PasswordBox.Password = savedPwd;
+                    StatusText.Text = $"已自动填入本机保存的账号 {account.AppleId}，点击登录即可（过期签名会自动续期）。";
+                    StatusText.Visibility = Visibility.Visible;
+                }
+            }
+            else if (!string.IsNullOrEmpty(settings.Data.AppleId))
             {
                 AppleIdBox.Text = settings.Data.AppleId;
             }
@@ -62,6 +87,7 @@ public partial class AppleSetupDialog : Window
 
             _appleId = appleId;
             _password = password;
+            _rememberPassword = RememberPasswordBox.IsChecked == true;
 
             var settings = new SettingsService();
             _gsaClient = new AppleGsaClient(settings.ResolveToolsDir(), _dataDir, AnisetteUrlBox.Text.Trim());
@@ -220,12 +246,23 @@ public partial class AppleSetupDialog : Window
                     ResultP12Password = "temp123";
                     ResultAppleId = _appleId;
 
-                    settings.Data.AppleId = _appleId;
+                    // 多账号管理（v1.0.86）：登记/更新账号，记住密码（DPAPI 加密），绑定设备
                     settings.Data.AnisetteUrl = AnisetteUrlBox.Text.Trim();
-                    // 将证书/描述文件存入该设备专属配置（多设备互不覆盖）
+                    var account = settings.Data.GetOrCreateAccount(_appleId);
+                    account.TeamId = provResult.TeamId;
+                    account.LastLoginUtc = DateTime.UtcNow;
+                    if (_rememberPassword)
+                    {
+                        account.SetPassword(_password);
+                    }
+                    settings.Data.SetDeviceAccount(dev.Udid, _appleId);
+                    // 将证书/描述文件存入该设备专属配置（多设备互不覆盖；内部同步更新账号签名材料与有效期）
                     settings.Data.SetDeviceConfig(dev.Udid, provResult.P12Path, "temp123", provResult.ProvisionPath);
+                    settings.Data.SetActiveAccount(_appleId);
                     settings.Data.SetupCompleted = true;
                     settings.Save();
+
+                    LogService.Info($"[Setup] 账号 {_appleId} 已保存（记住密码: {_rememberPassword}），设备 {dev.DisplayName} 已绑定该账号");
 
                     _completed = true;
                     StatusText.Text = "全自动签名配置完成！";

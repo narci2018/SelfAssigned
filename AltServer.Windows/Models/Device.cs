@@ -68,6 +68,14 @@ public class Device : INotifyPropertyChanged
         set { if (_connection != value) { _connection = value; OnPropertyChanged(); } }
     }
 
+    private string? _accountName;
+    /// <summary>该设备绑定的签名账号（v1.0.86，用于设备列表显示；未绑定为 null）</summary>
+    public string? AccountName
+    {
+        get => _accountName;
+        set { if (_accountName != value) { _accountName = value; OnPropertyChanged(); } }
+    }
+
     /// <summary>用户友好显示名称：若设备名为空，自动使用型号或类型+UDID前8位</summary>
     public string DisplayName
     {

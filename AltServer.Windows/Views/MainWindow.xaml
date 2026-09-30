@@ -2,13 +2,15 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:AltServer.Windows.Views"
-        Title="AltServer" Height="720" Width="1000" MinHeight="540" MinWidth="800"
+        Title="AltServer" Height="760" Width="1000" MinHeight="620" MinWidth="800"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource {x:Static SystemColors.ControlBrushKey}}">
 
     <Window.Resources>
         <local:RunningStateBrushConverter x:Key="RunningStateBrush" />
         <local:ServerStateTextConverter x:Key="ServerStateText" />
+        <local:EmptyToCollapsedConverter x:Key="EmptyToCollapsed" />
+        <local:DaysRemainingBrushConverter x:Key="DaysRemainingBrush" />
 
         <Style x:Key="HeaderText" TargetType="TextBlock">
             <Setter Property="FontSize" Value="18" />
@@ -93,6 +95,10 @@
             <StatusBarItem>
                 <TextBlock Text="{Binding ProvisionExpiryText}" FontSize="12" />
             </StatusBarItem>
+            <Separator />
+            <StatusBarItem>
+                <TextBlock Text="{Binding ExpirySummaryText, FallbackValue='签名有效期: 未配置'}" FontSize="12" FontWeight="SemiBold" />
+            </StatusBarItem>
         </StatusBar>
 
         <!-- 中部内容区 -->
@@ -107,11 +113,12 @@
                 <ColumnDefinition Width="3*" />
             </Grid.ColumnDefinitions>
 
-            <!-- 左列：设备 + 已安装应用 -->
+            <!-- 左列：设备 + IPA库 + 已安装应用 -->
             <Grid Grid.Row="0" Grid.Column="0">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
-                    <RowDefinition Height="250" />
+                    <RowDefinition Height="200" />
+                    <RowDefinition Height="190" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
@@ -154,6 +161,9 @@
                                                 </TextBlock>
                                                 <TextBlock FontSize="11" Foreground="#64748B"
                                                            Text="{Binding Udid}" />
+                                                <TextBlock FontSize="11" Foreground="#2563EB"
+                                                           Text="{Binding AccountName, StringFormat='🔑 绑定账号: {0}'}"
+                                                           Visibility="{Binding AccountName, Converter={StaticResource EmptyToCollapsed}}" />
                                             </StackPanel>
                                             <TextBlock DockPanel.Dock="Right" FontSize="11" Foreground="#64748B"
                                                        VerticalAlignment="Center"
@@ -171,7 +181,71 @@
                     </Grid>
                 </Border>
 
-                <Border Grid.Row="2" Style="{StaticResource SectionCard}" Margin="0,0,6,0">
+                <!-- IPA 库（v1.0.86） -->
+                <Border Grid.Row="2" Style="{StaticResource SectionCard}" Margin="0,0,6,8">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <Grid Grid.Row="0" Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="IPA 库" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding IpaLibrary.Count, StringFormat='({0})'}"
+                                           Foreground="#64748B" FontSize="12" Margin="6,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                <Button Content="添加 IPA" Click="OnAddIpa" FontSize="12" Padding="8,4" Margin="0,0,6,0" />
+                                <Button Content="移除" Click="OnRemoveIpa" FontSize="12" Padding="8,4" Margin="0,0,6,0" />
+                                <Button Content="签名安装" Click="OnInstallFromLibrary" FontSize="12" Padding="8,4"
+                                        Style="{StaticResource PrimaryButton}" />
+                            </StackPanel>
+                        </Grid>
+
+                        <ListBox Grid.Row="1" ItemsSource="{Binding IpaLibrary}" SelectedItem="{Binding SelectedIpa}"
+                                 BorderThickness="0" Background="Transparent"
+                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                 MouseDoubleClick="OnIpaLibraryDoubleClick">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Padding="6,4" CornerRadius="6" Margin="0,1">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock FontWeight="SemiBold" Text="{Binding DisplayName}" />
+                                                <TextBlock FontSize="11" Foreground="#64748B"
+                                                           Text="{Binding BundleId, FallbackValue=''}">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Style.Triggers>
+                                                                <Trigger Property="Text" Value="">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                </Trigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </StackPanel>
+                                            <TextBlock Grid.Column="1" FontSize="11" Foreground="#64748B"
+                                                       VerticalAlignment="Center"
+                                                       Text="{Binding SizeText}" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Grid>
+                </Border>
+
+                <Border Grid.Row="3" Style="{StaticResource SectionCard}" Margin="0,0,6,0">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
@@ -215,40 +289,67 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
-                <!-- Apple ID 签名管理 (对齐爱思助手) -->
+                <!-- 账号管理（v1.0.86：多账号并列 + 登录持久化 + 过期倒计时） -->
                 <Border Grid.Row="0" Style="{StaticResource SectionCard}" Margin="6,0,0,8">
-                    <StackPanel>
-                        <DockPanel Margin="0,0,0,10">
-                            <TextBlock Text="Apple ID 签名管理" Style="{StaticResource HeaderText}" />
-                            <Button DockPanel.Dock="Right" Content="🔑 登录 / 切换账号" FontSize="12" Padding="10,4"
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <DockPanel Grid.Row="0" Margin="0,0,0,8">
+                            <TextBlock Text="账号管理" Style="{StaticResource HeaderText}" />
+                            <Button DockPanel.Dock="Right" Content="🔑 登录 / 添加账号" FontSize="12" Padding="10,4"
                                     Click="OnOpenAppleLogin" />
                         </DockPanel>
 
-                        <Grid Margin="0,0,0,8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="90" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="账号:" Foreground="#64748B" FontSize="13" VerticalAlignment="Center" />
-                            <TextBlock Grid.Column="1" Text="{Binding AppleIdDisplay}" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Center" />
-                        </Grid>
+                        <ListBox Grid.Row="1" ItemsSource="{Binding Accounts}" SelectedItem="{Binding SelectedAccount}"
+                                 Height="96" BorderThickness="0" Background="Transparent"
+                                 BorderBrush="#E2E8F0" ScrollViewer.VerticalScrollBarVisibility="Auto">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Padding="6,3" CornerRadius="6" Margin="0,1">
+                                        <DockPanel>
+                                            <Ellipse Width="8" Height="8" Margin="0,0,8,0" VerticalAlignment="Center"
+                                                     Fill="{Binding DaysRemaining, Converter={StaticResource DaysRemainingBrush}}" />
+                                            <StackPanel>
+                                                <TextBlock FontWeight="SemiBold" FontSize="13" Text="{Binding Display}" />
+                                                <TextBlock FontSize="11" Foreground="#64748B" Text="{Binding Detail}" />
+                                            </StackPanel>
+                                        </DockPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
 
-                        <Grid Margin="0,0,0,4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="90" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="签名状态:" Foreground="#64748B" FontSize="13" VerticalAlignment="Center" />
-                            <TextBlock Grid.Column="1" Text="{Binding ProvisionExpiryText, FallbackValue='未配置证书'}" FontSize="12" VerticalAlignment="Center" Foreground="#2563EB" TextWrapping="Wrap" />
-                        </Grid>
-                    </StackPanel>
+                        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
+                            <Button Content="设为当前账号" FontSize="12" Padding="8,4"
+                                    Click="OnSetActiveAccount" Margin="0,0,8,0" />
+                            <Button Content="移除账号" FontSize="12" Padding="8,4"
+                                    Click="OnRemoveAccount" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- 签名状态摘要 -->
+                <Border Grid.Row="1" Style="{StaticResource SectionCard}" Margin="6,0,0,8" Padding="12,8">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="90" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="签名状态:" Foreground="#64748B" FontSize="13" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" Text="{Binding ProvisionExpiryText, FallbackValue='未配置证书'}" FontSize="12" VerticalAlignment="Center" Foreground="#2563EB" TextWrapping="Wrap" />
+                    </Grid>
                 </Border>
 
                 <!-- 操作区 -->
-                <Border Grid.Row="1" Style="{StaticResource SectionCard}" Margin="6,0,0,8">
+                <Border Grid.Row="2" Style="{StaticResource SectionCard}" Margin="6,0,0,8">
                     <StackPanel>
                         <TextBlock Text="操作" Style="{StaticResource HeaderText}" Margin="0,0,0,10" />
 
@@ -273,7 +374,7 @@
                 </Border>
 
                 <!-- 日志区 -->
-                <Border Grid.Row="2" Style="{StaticResource SectionCard}" Margin="6,0,0,0">
+                <Border Grid.Row="3" Style="{StaticResource SectionCard}" Margin="6,0,0,0">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />

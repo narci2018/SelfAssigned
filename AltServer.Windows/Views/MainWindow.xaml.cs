@@ -25,6 +25,9 @@ public partial class MainWindow : Window
             // 订阅工具缺失事件：工具不全时弹出明确提示，不静默失败
             ViewModel.MissingToolsDetected += OnMissingTools;
 
+            // 订阅签名过期提醒：托盘气泡（24小时内最多一次，由 ViewModel 限流）
+            ViewModel.ExpiryReminderDetected += OnExpiryReminder;
+
             // 先检测工具完整性（工具缺失时会弹框提示）
             ViewModel.VerifyTools();
 
@@ -32,6 +35,10 @@ public partial class MainWindow : Window
             if (string.IsNullOrEmpty(ViewModel.P12Path) || !System.IO.File.Exists(ViewModel.P12Path))
             {
                 ShowSetupWizard();
+            }
+            else
+            {
+                ViewModel.CheckExpiryAndRemind();
             }
         };
     }
@@ -87,6 +94,130 @@ public partial class MainWindow : Window
         }
 
         ViewModel.ScanSigningConfig();
+        ViewModel.RefreshAccountsView();
+        ViewModel.UpdateDeviceAccountLabels();
+        ViewModel.CheckExpiryAndRemind();
+    }
+
+    // MARK: - 账号管理（v1.0.86）
+
+    private void OnSetActiveAccount(object sender, RoutedEventArgs e)
+    {
+        var acct = ViewModel.SelectedAccount;
+        if (acct is null)
+        {
+            Services.LogService.Warning("请先在账号列表中选择要启用的账号");
+            return;
+        }
+        ViewModel.SetActiveAccount(acct.AppleId);
+    }
+
+    private void OnRemoveAccount(object sender, RoutedEventArgs e)
+    {
+        var acct = ViewModel.SelectedAccount;
+        if (acct is null)
+        {
+            Services.LogService.Warning("请先在账号列表中选择要移除的账号");
+            return;
+        }
+
+        var confirm = System.Windows.MessageBox.Show(
+            $"确定移除账号 {acct.AppleId} 吗？\n\n其名下设备将被解绑（签名文件保留在磁盘，设备仍可用旧文件签名）。",
+            "移除账号",
+            System.Windows.MessageBoxButton.YesNo,
+            System.Windows.MessageBoxImage.Question);
+        if (confirm != System.Windows.MessageBoxResult.Yes) return;
+
+        ViewModel.RemoveAccount(acct.AppleId);
+    }
+
+    // MARK: - IPA 库（v1.0.86）
+
+    private void OnAddIpa(object sender, RoutedEventArgs e)
+    {
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "选择要加入 IPA 库的文件",
+            Filter = "IPA文件 (*.ipa)|*.ipa|所有文件 (*.*)|*.*",
+            Multiselect = true
+        };
+        if (dlg.ShowDialog(this) != true) return;
+
+        var added = ViewModel.AddIpaToLibrary(dlg.FileNames);
+        if (added == 0)
+        {
+            Services.LogService.Warning("未添加任何 IPA 文件");
+        }
+    }
+
+    private void OnRemoveIpa(object sender, RoutedEventArgs e)
+    {
+        var item = ViewModel.SelectedIpa;
+        if (item is null)
+        {
+            Services.LogService.Warning("请先在 IPA 库中选择要移除的文件");
+            return;
+        }
+
+        var confirm = System.Windows.MessageBox.Show(
+            $"确定从 IPA 库移除「{item.DisplayName}」吗？\n库内文件将被一并删除。",
+            "移除 IPA",
+            System.Windows.MessageBoxButton.YesNo,
+            System.Windows.MessageBoxImage.Question);
+        if (confirm != System.Windows.MessageBoxResult.Yes) return;
+
+        ViewModel.RemoveIpaFromLibrary(item);
+    }
+
+    private async void OnInstallFromLibrary(object sender, RoutedEventArgs e)
+    {
+        var item = ViewModel.SelectedIpa;
+        if (item is null)
+        {
+            Services.LogService.Warning("请先在 IPA 库中选择要安装的 IPA");
+            return;
+        }
+        if (ViewModel.SelectedDevice is null)
+        {
+            Services.LogService.Warning("请先在左侧选择目标设备");
+            return;
+        }
+
+        var path = ViewModel.GetLibraryIpaPath(item);
+        if (path is null)
+        {
+            Services.LogService.Error($"IPA 文件已丢失: {item.FileName}，请先移除后重新添加");
+            return;
+        }
+
+        IsEnabled = false;
+        try
+        {
+            await ViewModel.SignAndInstallAsync(path);
+        }
+        finally
+        {
+            IsEnabled = true;
+        }
+    }
+
+    private void OnIpaLibraryDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        OnInstallFromLibrary(sender, e);
+    }
+
+    // MARK: - 过期提醒（v1.0.86）
+
+    private void OnExpiryReminder(string message)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            try
+            {
+                _trayIcon?.ShowBalloonTip(8000, "AltServer 签名过期提醒", message, ToolTipIcon.Warning);
+            }
+            catch { }
+        });
     }
 
     // MARK: - 系统托盘

@@ -356,6 +356,18 @@ public partial class MainWindow : Window
         _ = ViewModel.RefreshAllAsync();
     }
 
+    // MARK: - 投屏与照片（v1.0.87）
+
+    private void OnMirrorPreview(object sender, RoutedEventArgs e)
+    {
+        ViewModel.OpenMirrorWindow();
+    }
+
+    private void OnPhotos(object sender, RoutedEventArgs e)
+    {
+        ViewModel.OpenPhotosWindow();
+    }
+
     private void OnCopyAllLogs(object sender, RoutedEventArgs e)
     {
         var text = string.Join(Environment.NewLine, ViewModel.LogEntries);

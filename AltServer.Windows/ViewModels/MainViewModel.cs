@@ -9,6 +9,7 @@ using System.Windows;
 using System.Windows.Threading;
 using AltServer.Windows.Models;
 using AltServer.Windows.Services;
+using AltServer.Windows.Views;
 
 namespace AltServer.Windows.ViewModels;
 
@@ -24,6 +25,8 @@ public class MainViewModel : ObservableObject
     private readonly InstalledAppRegistry _registry;
     private readonly HttpServer _server;
     private readonly IpaLibraryService _ipaLibrary;
+    private readonly PhotosService _photos = new();
+    private readonly Dictionary<string, Window> _featureWindows = new();
 
     private bool _isServerRunning;
     private bool _isRefreshing;
@@ -59,6 +62,9 @@ public class MainViewModel : ObservableObject
         Directory.CreateDirectory(appDataDir);
         _registry = new InstalledAppRegistry(appDataDir);
         _ipaLibrary = new IpaLibraryService();
+
+        // 为 libimobiledevice 原生库（照片/投屏 P/Invoke）注册 DLL 搜索路径
+        DeviceNative.EnsureToolsDirInSearchPath(_settings.ResolveToolsDir());
 
         Devices = new ObservableCollection<Device>();
         InstalledApps = new ObservableCollection<InstalledApp>();
@@ -1240,6 +1246,54 @@ public class MainViewModel : ObservableObject
 
     /// <summary>获取已安装应用的注册表信息</summary>
     public InstalledAppRegistry GetRegistry() => _registry;
+
+    // MARK: - 投屏预览与照片管理（v1.0.87）
+
+    /// <summary>打开实时投屏预览窗口（USB 截图流）</summary>
+    public void OpenMirrorWindow()
+    {
+        if (!EnsureSelectedDevice()) return;
+        OpenFeatureWindow("mirror", () => new MirrorWindow(SelectedDevice!),
+            "投屏预览窗口已打开。若画面空白，请解锁设备屏幕后等待自动重试。");
+    }
+
+    /// <summary>打开照片与视频管理窗口</summary>
+    public void OpenPhotosWindow()
+    {
+        if (!EnsureSelectedDevice()) return;
+        OpenFeatureWindow("photos", () => new PhotosWindow(SelectedDevice!),
+            null);
+    }
+
+    private bool EnsureSelectedDevice()
+    {
+        if (SelectedDevice is not null) return true;
+        LogService.Warning("请先在左侧选择目标设备");
+        return false;
+    }
+
+    /// <summary>按 (功能, 设备) 维度管理窗口单例；已打开则置前</summary>
+    private void OpenFeatureWindow(string feature, Func<Window> create, string? notice)
+    {
+        var key = $"{feature}:{SelectedDevice!.Udid}";
+
+        if (_featureWindows.TryGetValue(key, out var existing) && existing.IsLoaded)
+        {
+            existing.Activate();
+            return;
+        }
+        if (_featureWindows.ContainsKey(key)) _featureWindows.Remove(key);
+
+        var window = create();
+        window.Closed += (_, _) => _featureWindows.Remove(key);
+
+        var owner = System.Windows.Application.Current?.Windows.OfType<Window>().FirstOrDefault(w => w is MainWindow);
+        if (owner is not null) window.Owner = owner;
+        window.Show();
+        _featureWindows[key] = window;
+
+        if (!string.IsNullOrEmpty(notice)) LogService.Info(notice);
+    }
 
     // MARK: - HTTP API 处理器
 

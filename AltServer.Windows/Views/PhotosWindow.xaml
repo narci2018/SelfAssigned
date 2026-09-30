@@ -1,0 +1,99 @@
+<Window x:Class="AltServer.Windows.Views.PhotosWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="照片与视频" Height="620" Width="860" MinHeight="480" MinWidth="640"
+        WindowStartupLocation="CenterOwner" Background="#F8FAFC">
+
+    <Window.Resources>
+        <Style x:Key="PrimaryButton" TargetType="Button">
+            <Setter Property="Background" Value="#2563EB" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Padding" Value="12,7" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border" Background="{TemplateBinding Background}"
+                                CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="#1D4ED8" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="border" Property="Background" Value="#94A3B8" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- 顶部：标题 + 操作按钮 -->
+        <DockPanel Grid.Row="0" Margin="0,0,0,10">
+            <StackPanel>
+                <TextBlock x:Name="TitleText" Text="照片与视频" FontSize="18" FontWeight="Bold" />
+                <TextBlock x:Name="DeviceText" Text="" FontSize="12" Foreground="#64748B" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
+                <Button Content="刷新" Click="OnRefresh" Padding="10,7" Margin="0,0,8,0" />
+                <Button Content="全选" Click="OnSelectAll" Padding="10,7" Margin="0,0,8,0" />
+                <Button Content="⬇ 导出选中" Click="OnExportSelected" Margin="0,0,8,0"
+                        Style="{StaticResource PrimaryButton}" x:Name="ExportSelectedBtn" />
+                <Button Content="⬇ 导出全部" Click="OnExportAll" Margin="0,0,8,0"
+                        Style="{StaticResource PrimaryButton}" x:Name="ExportAllBtn" />
+                <Button Content="⬆ 从电脑导入" Click="OnImport" Margin="0,0,0,0"
+                        Style="{StaticResource PrimaryButton}" x:Name="ImportBtn" />
+            </StackPanel>
+        </DockPanel>
+
+        <!-- 文件列表 -->
+        <Border Grid.Row="1" Background="White" CornerRadius="8" BorderBrush="#E2E8F0" BorderThickness="1"
+                Padding="8">
+            <ListView x:Name="FilesList" SelectionMode="Extended"
+                      ScrollViewer.VerticalScrollBarVisibility="Auto">
+                <ListView.View>
+                    <GridView>
+                        <GridViewColumn Header="文件名" Width="330"
+                                        DisplayMemberBinding="{Binding Name}" />
+                        <GridViewColumn Header="类型" Width="70">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding IsVideoText}" />
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
+                        <GridViewColumn Header="大小" Width="100"
+                                        DisplayMemberBinding="{Binding SizeText}" />
+                        <GridViewColumn Header="修改时间" Width="170"
+                                        DisplayMemberBinding="{Binding ModifiedText}" />
+                    </GridView>
+                </ListView.View>
+            </ListView>
+        </Border>
+
+        <!-- 进度 -->
+        <StackPanel Grid.Row="2" Margin="0,10,0,0">
+            <TextBlock x:Name="StatusText" Text="就绪" FontSize="12" Foreground="#475569" Margin="0,0,0,6" />
+            <ProgressBar x:Name="ProgressBar" Height="6" Minimum="0" Maximum="100"
+                         Background="#E2E8F0" Foreground="#2563EB" Value="0" />
+        </StackPanel>
+
+        <!-- 说明 -->
+        <Border Grid.Row="3" Background="#EFF6FF" CornerRadius="6" Padding="10,7" Margin="0,10,0,0">
+            <TextBlock FontSize="11" Foreground="#1E40AF" TextWrapping="Wrap"
+                       Text="导出：将设备上的照片/视频保存到电脑（支持多选）。导入：把电脑上的图片/视频写入设备相机胶卷目录，部分 iOS 版本可能需要在相册 App 重新打开或重启设备后才会显示。" />
+        </Border>
+    </Grid>
+</Window>

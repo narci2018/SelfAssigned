@@ -45,6 +45,9 @@ public static class DeviceNative
     private static extern int lockdownd_start_service(IntPtr client, string service, out IntPtr serviceDescriptor);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int lockdownd_start_service_with_escrow_bag(IntPtr client, string service, out IntPtr serviceDescriptor);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     private static extern int lockdownd_service_descriptor_free(IntPtr serviceDescriptor);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
@@ -151,10 +154,16 @@ public static class DeviceNative
             Check("lockdownd_client_new_with_handshake", lockdownd_client_new_with_handshake(_device, out _lockdown, "AltServer"));
         }
 
-        /// <summary>启动 lockdown 服务并创建对应客户端；返回服务描述符指针（由调用方负责 free）</summary>
+        /// <summary>启动 lockdown 服务：优先使用 escrow bag（iOS 17+ 的 screenshotr/afc 等服务需要）；失败则回落到无 escrow bag 版本</summary>
         private IntPtr StartService(string serviceName)
         {
-            Check($"lockdownd_start_service({serviceName})", lockdownd_start_service(_lockdown, serviceName, out var descriptor));
+            // 优先使用 with_escrow_bag：iOS 17+ 的 screenshotr、afc 等服务需要
+            // escrow bag 提供更高信任级别，否则 lockdownd 返回 -27
+            var rc = lockdownd_start_service_with_escrow_bag(_lockdown, serviceName, out var descriptor);
+            if (rc == 0) return descriptor;
+
+            // 回落到普通版本（兼容旧版 libimobiledevice 或不需要 escrow bag 的服务）
+            Check($"lockdownd_start_service({serviceName})", lockdownd_start_service(_lockdown, serviceName, out descriptor));
             return descriptor;
         }
 

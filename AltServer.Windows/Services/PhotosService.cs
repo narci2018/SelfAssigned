@@ -8,7 +8,7 @@ namespace AltServer.Windows.Services;
 /// </summary>
 public class PhotosService
 {
-    public const string DcimRoot = "/dcim";
+    public const string DcimRoot = "/DCIM";
 
     public sealed class MediaFile
     {

@@ -92,7 +92,10 @@ public static class DeviceNative
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     private static extern int screenshotr_take_screenshot(IntPtr client, out IntPtr imageData, out ulong imageSize);
 
-    // libimobiledevice 使用 MSVC 动态 UCRT 分配堆内存，字符串数组与截图缓冲需要用同一 CRT 释放
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int afc_dictionary_free(IntPtr dictionary);
+
+    // libimobiledevice 使用 MSVC 动态 UCRT 分配堆内存，截图数据缓冲需要用同一 CRT 释放
     [DllImport("ucrtbase.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern void free(IntPtr ptr);
 
@@ -126,13 +129,21 @@ public static class DeviceNative
     private static void FreeStringArray(IntPtr arrayPtr)
     {
         if (arrayPtr == IntPtr.Zero) return;
-        for (var i = 0; ; i++)
+        try
         {
-            var item = Marshal.ReadIntPtr(arrayPtr, i * IntPtr.Size);
-            if (item == IntPtr.Zero) break;
-            free(item);
+            afc_dictionary_free(arrayPtr);
         }
-        free(arrayPtr);
+        catch
+        {
+            // 兜底回退：若未导出 afc_dictionary_free 则逐项释放
+            for (var i = 0; ; i++)
+            {
+                var item = Marshal.ReadIntPtr(arrayPtr, i * IntPtr.Size);
+                if (item == IntPtr.Zero) break;
+                free(item);
+            }
+            free(arrayPtr);
+        }
     }
 
     // MARK: - 设备会话
@@ -247,6 +258,19 @@ public static class DeviceNative
                 {
                     FreeStringArray(entries);
                 }
+            }
+        }
+
+        /// <summary>安全列出目录内容，如果路径不存在或读取失败返回空数组而不抛出异常</summary>
+        public DirEntry[] TryListDirectory(string path)
+        {
+            try
+            {
+                return ListDirectory(path);
+            }
+            catch
+            {
+                return Array.Empty<DirEntry>();
             }
         }
 

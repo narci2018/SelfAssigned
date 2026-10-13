@@ -58,7 +58,8 @@ public partial class PhotosWindow : Window
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"读取失败: {ex.Message}";
+            var hint = "（请确保 iPhone/iPad 屏幕已解锁、并在屏幕上点击了「信任此电脑」；若刚插拔数据线请稍候重试）";
+            StatusText.Text = $"读取失败: {ex.Message} {hint}";
             LogService.Error($"[照片] 读取相册失败: {ex.Message}");
         }
         finally

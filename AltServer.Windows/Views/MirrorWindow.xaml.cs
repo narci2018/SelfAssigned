@@ -95,9 +95,12 @@ public partial class MirrorWindow : Window
                 Dispatcher.BeginInvoke(() =>
                 {
                     PlaceholderText.Text = "画面暂不可用";
-                    StatusText.Text = $"截屏失败: {ex.Message}（请确认设备已解锁、USB 连接正常，将自动重试）";
+                    var tip = ex.Message.Contains("-27")
+                        ? "（iOS 需要设备开启「开发者模式」并挂载 DeveloperDiskImage 调试镜像才能启用原生截屏服务）"
+                        : "（请确认设备已解锁、已在手机上点击「信任此电脑」，将自动重试）";
+                    StatusText.Text = $"截屏失败: {ex.Message} {tip}";
                 });
-                await Task.Delay(1500, ct);
+                await Task.Delay(2500, ct);
             }
 
             // 目标帧间隔 250ms（约 4 FPS），截图本身耗时已计入
@@ -158,7 +161,10 @@ public partial class MirrorWindow : Window
         }
         catch (Exception ex)
         {
-            System.Windows.MessageBox.Show(this, $"截屏失败: {ex.Message}\n请确认设备已解锁且 USB 连接正常。", "投屏预览",
+            var detail = ex.Message.Contains("-27")
+                ? "iOS 限制：底层截屏服务 (screenshotr) 需要设备开启「开发者模式」并挂载 DeveloperDiskImage 调试镜像才能启动。\n若未配置开发者调试环境，建议使用 iOS 控制中心的「屏幕镜像」(AirPlay) 进行投屏。"
+                : "请确认设备屏幕已解锁、已在屏幕上点击「信任此电脑」且 USB 连接稳定。";
+            System.Windows.MessageBox.Show(this, $"截屏失败: {ex.Message}\n\n{detail}", "投屏预览",
                 System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
         }
     }

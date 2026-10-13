@@ -38,28 +38,64 @@ public class PhotosService
     };
     private static readonly string[] MediaVideoExtensions = { ".mov", ".mp4", ".m4v" };
 
-    /// <summary>列出相机胶卷全部媒体文件（/DCIM/*APPLE 目录下的图片与视频），按名称倒序（最新在前）</summary>
+    /// <summary>列出相机胶卷全部媒体文件，动态探测 DCIM / 1xxAPPLE 目录，避免硬编码路径报错</summary>
     public List<MediaFile> ListCameraRoll(string udid)
     {
         using var session = new DeviceNative.IdeviceSession(udid);
         using var afc = session.CreateAfcClient();
 
         var result = new List<MediaFile>();
-        var rootEntries = afc.ListDirectory(DcimRoot);
 
-        // DCIM 下的 1xxAPPLE 卷目录 + 根目录散落的媒体文件
-        foreach (var entry in rootEntries.Where(e => !e.IsDirectory))
+        // 1. 尝试从 AFC 根目录探测实际存在的照片目录
+        var rootEntries = afc.TryListDirectory("/");
+        var candidateRoots = new List<string>();
+
+        // 检查根目录下的 DCIM 目录（忽略大小写）
+        foreach (var entry in rootEntries.Where(e => e.IsDirectory))
         {
-            if (IsMediaFile(entry.Name)) result.Add(ToMediaFile(entry, DcimRoot));
+            if (string.Equals(entry.Name, "DCIM", StringComparison.OrdinalIgnoreCase))
+            {
+                candidateRoots.Add($"/{entry.Name}");
+            }
         }
 
-        foreach (var dir in rootEntries.Where(e => e.IsDirectory && e.Name.EndsWith("APPLE", StringComparison.OrdinalIgnoreCase)))
+        // 若根目录未找到，尝试默认路径
+        if (candidateRoots.Count == 0)
         {
-            var dirPath = $"{DcimRoot}/{dir.Name}";
-            foreach (var file in afc.ListDirectory(dirPath).Where(f => !f.IsDirectory))
+            candidateRoots.Add(DcimRoot);
+            candidateRoots.Add("/dcim");
+            candidateRoots.Add("DCIM");
+        }
+
+        var scannedDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var dcimPath in candidateRoots)
+        {
+            if (scannedDirs.Contains(dcimPath)) continue;
+            scannedDirs.Add(dcimPath);
+
+            var dcimEntries = afc.TryListDirectory(dcimPath);
+            if (dcimEntries.Length == 0) continue;
+
+            // DCIM 根目录散落的媒体文件
+            foreach (var entry in dcimEntries.Where(e => !e.IsDirectory))
             {
-                if (IsMediaFile(file.Name)) result.Add(ToMediaFile(file, dirPath));
+                if (IsMediaFile(entry.Name)) result.Add(ToMediaFile(entry, dcimPath));
             }
+
+            // DCIM 下的子目录（如 100APPLE, 101APPLE 等包含 APPLE 的相册卷，或者所有包含媒体的子目录）
+            foreach (var dir in dcimEntries.Where(e => e.IsDirectory))
+            {
+                var dirPath = $"{dcimPath.TrimEnd('/')}/{dir.Name}";
+                var subFiles = afc.TryListDirectory(dirPath);
+                foreach (var file in subFiles.Where(f => !f.IsDirectory))
+                {
+                    if (IsMediaFile(file.Name)) result.Add(ToMediaFile(file, dirPath));
+                }
+            }
+
+            // 如果在该 DCIM 目录下成功找到了文件或找到了卷目录，就不再扫描后续候选路径
+            if (result.Count > 0) break;
         }
 
         return result.OrderByDescending(f => f.Name, StringComparer.OrdinalIgnoreCase).ToList();
@@ -140,7 +176,20 @@ public class PhotosService
     /// <summary>定位/创建导入目录：优先复用已有的 1xxAPPLE，否则创建 100APPLE</summary>
     private static string EnsureImportDirectory(DeviceNative.AfcClient afc)
     {
-        var entries = afc.ListDirectory(DcimRoot);
+        var rootEntries = afc.TryListDirectory("/");
+        var dcimName = rootEntries
+            .Where(e => e.IsDirectory && string.Equals(e.Name, "DCIM", StringComparison.OrdinalIgnoreCase))
+            .Select(e => e.Name)
+            .FirstOrDefault() ?? "DCIM";
+
+        var dcimPath = $"/{dcimName}";
+        var entries = afc.TryListDirectory(dcimPath);
+        if (entries.Length == 0 && dcimPath != DcimRoot)
+        {
+            entries = afc.TryListDirectory(DcimRoot);
+            if (entries.Length > 0) dcimPath = DcimRoot;
+        }
+
         var existing = entries
             .Where(e => e.IsDirectory && e.Name.EndsWith("APPLE", StringComparison.OrdinalIgnoreCase))
             .Select(e => e.Name)
@@ -148,8 +197,12 @@ public class PhotosService
             .FirstOrDefault();
 
         var dirName = existing ?? "100APPLE";
-        var path = $"{DcimRoot}/{dirName}";
-        if (existing is null) afc.MakeDirectory(path);
+        var path = $"{dcimPath}/{dirName}";
+        if (existing is null)
+        {
+            try { afc.MakeDirectory(dcimPath); } catch { }
+            try { afc.MakeDirectory(path); } catch { }
+        }
         return path;
     }
 

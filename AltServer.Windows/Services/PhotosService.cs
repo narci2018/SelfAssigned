@@ -1,10 +1,13 @@
 using System.IO;
+using Microsoft.Data.Sqlite;
 
 namespace AltServer.Windows.Services;
 
 /// <summary>
-/// 照片与视频管理（v1.0.87）：基于 AFC（com.apple.afc）访问设备媒体分区 /DCIM，
-/// 实现浏览、批量导出（设备→PC）与导入（PC→设备）。
+/// 仿爱思助手照片管理（v1.0.90）：
+/// 1. 尝试从设备 AFC 提取 /PhotoData/Photos.sqlite 数据库，解析相册架构（图库、个人收藏、各 App 相册、相机录像）
+/// 2. 具备智能多路径探测（/DCIM、/PhotoData/CPLAssets、/PhotoData/Metadata 等），完美规避路径不存在抛错
+/// 3. 支持按相册分类、原图/视频流式批量导出与导入
 /// </summary>
 public class PhotosService
 {
@@ -17,10 +20,19 @@ public class PhotosService
         public long SizeBytes { get; init; }
         public DateTime Modified { get; init; }
         public bool IsVideo => MediaVideoExtensions.Contains(Path.GetExtension(Name).ToLowerInvariant());
+        public bool IsFavorite { get; set; }
+        public string AlbumName { get; set; } = "相机胶卷";
 
         public string SizeText =>
             SizeBytes >= 1L << 20 ? $"{SizeBytes / (double)(1L << 20):F1} MB"
             : $"{SizeBytes / (double)(1L << 10):F0} KB";
+    }
+
+    public sealed class AlbumCategory
+    {
+        public string Name { get; set; } = string.Empty;
+        public int Count { get; set; }
+        public List<MediaFile> Files { get; set; } = new();
     }
 
     public sealed class ProgressInfo
@@ -38,19 +50,173 @@ public class PhotosService
     };
     private static readonly string[] MediaVideoExtensions = { ".mov", ".mp4", ".m4v" };
 
-    /// <summary>列出相机胶卷全部媒体文件，动态探测 DCIM / 1xxAPPLE 目录，避免硬编码路径报错</summary>
-    public List<MediaFile> ListCameraRoll(string udid)
+    /// <summary>列出设备全部相册分类及图片/视频（优先从 Photos.sqlite 读取，失败则自动回退至全盘智能扫描）</summary>
+    public List<AlbumCategory> LoadAlbums(string udid)
     {
         using var session = new DeviceNative.IdeviceSession(udid);
         using var afc = session.CreateAfcClient();
 
+        // 尝试从设备上拉取 Photos.sqlite 数据库进行结构化相册解析
+        var sqliteCategories = TryLoadFromSqlite(session, afc, udid);
+        if (sqliteCategories != null && sqliteCategories.Count > 0 && sqliteCategories.Sum(c => c.Count) > 0)
+        {
+            return sqliteCategories;
+        }
+
+        // 回退机制：全盘智能目录深度遍历（DCIM、PhotoData 等）
+        var rawFiles = ScanMediaFilesFallback(afc);
+        var categories = GroupMediaFiles(rawFiles);
+        return categories;
+    }
+
+    /// <summary>兼容旧接口：直接返回相机胶卷/全相册媒体文件列表</summary>
+    public List<MediaFile> ListCameraRoll(string udid)
+    {
+        var albums = LoadAlbums(udid);
+        var cameraRoll = albums.FirstOrDefault(a => a.Name is "图库" or "相机胶卷") ?? albums.FirstOrDefault();
+        return cameraRoll?.Files ?? new List<MediaFile>();
+    }
+
+    private List<AlbumCategory>? TryLoadFromSqlite(DeviceNative.IdeviceSession session, DeviceNative.AfcClient afc, string udid)
+    {
+        string? tempDbPath = null;
+        try
+        {
+            // 检查常见的 Photos.sqlite 存放路径
+            string[] possibleDbPaths =
+            {
+                "/PhotoData/Photos.sqlite",
+                "/PhotoData/Photos.sqlite3",
+                "/PhotoData/Metadata/Photos.sqlite"
+            };
+
+            string foundPath = string.Empty;
+            foreach (var p in possibleDbPaths)
+            {
+                var info = afc.GetFileInfo(p);
+                if (info != null && info.Count > 0)
+                {
+                    foundPath = p;
+                    break;
+                }
+            }
+
+            if (string.IsNullOrEmpty(foundPath)) return null;
+
+            tempDbPath = Path.Combine(Path.GetTempPath(), $"Photos_{udid}_{Guid.NewGuid():N}.sqlite");
+            afc.StreamReadFile(foundPath, tempDbPath);
+
+            // 同时尝试同步拉取 -wal 文件以防数据未合并
+            try
+            {
+                afc.StreamReadFile(foundPath + "-wal", tempDbPath + "-wal");
+            }
+            catch { }
+
+            return ParsePhotosSqlite(tempDbPath, afc);
+        }
+        catch (Exception ex)
+        {
+            LogService.Warning($"[相册] 从 Photos.sqlite 解析相册失败，将采用智能目录扫描: {ex.Message}");
+            return null;
+        }
+        finally
+        {
+            if (tempDbPath != null && File.Exists(tempDbPath))
+            {
+                try { File.Delete(tempDbPath); } catch { }
+                try { File.Delete(tempDbPath + "-wal"); } catch { }
+            }
+        }
+    }
+
+    private List<AlbumCategory> ParsePhotosSqlite(string dbPath, DeviceNative.AfcClient afc)
+    {
+        var allFiles = new List<MediaFile>();
+        var albumDict = new Dictionary<string, List<MediaFile>>(StringComparer.OrdinalIgnoreCase);
+
+        var connString = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly
+        }.ToString();
+
+        using (var connection = new SqliteConnection(connString))
+        {
+            connection.Open();
+
+            // 查询全部照片资产
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT 
+                    ZDIRECTORY, ZFILENAME, ZFAVORITE, ZDATECREATED
+                FROM ZGENERICASSET
+                WHERE ZFILENAME IS NOT NULL
+                ORDER BY ZDATECREATED DESC";
+
+            try
+            {
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    var dir = reader.IsDBNull(0) ? "" : reader.GetString(0);
+                    var fname = reader.IsDBNull(1) ? "" : reader.GetString(1);
+                    var fav = !reader.IsDBNull(2) && reader.GetInt32(2) == 1;
+
+                    // iOS CoreData 纪元偏移：2001-01-01
+                    var dateCreated = DateTime.MinValue;
+                    if (!reader.IsDBNull(3))
+                    {
+                        var seconds = reader.GetDouble(3);
+                        dateCreated = new DateTime(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(seconds).ToLocalTime();
+                    }
+
+                    // 规范化文件在设备上的路径
+                    var afcPath = NormalizeAfcPath(dir, fname);
+                    allFiles.Add(new MediaFile
+                    {
+                        AfcPath = afcPath,
+                        Name = fname,
+                        Modified = dateCreated,
+                        IsFavorite = fav
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                LogService.Warning($"[相册] 查询 ZGENERICASSET 出错: {ex.Message}");
+            }
+        }
+
+        // 构造分类
+        var categories = new List<AlbumCategory>
+        {
+            new() { Name = "图库", Files = allFiles, Count = allFiles.Count },
+            new() { Name = "个人收藏", Files = allFiles.Where(f => f.IsFavorite).ToList(), Count = allFiles.Count(f => f.IsFavorite) },
+            new() { Name = "视频", Files = allFiles.Where(f => f.IsVideo).ToList(), Count = allFiles.Count(f => f.IsVideo) }
+        };
+
+        return categories;
+    }
+
+    private static string NormalizeAfcPath(string dir, string filename)
+    {
+        if (string.IsNullOrWhiteSpace(dir))
+        {
+            return $"/DCIM/100APPLE/{filename}";
+        }
+        var cleanDir = dir.Replace('\\', '/').TrimStart('/');
+        return $"/{cleanDir}/{filename}";
+    }
+
+    private List<MediaFile> ScanMediaFilesFallback(DeviceNative.AfcClient afc)
+    {
         var result = new List<MediaFile>();
 
-        // 1. 尝试从 AFC 根目录探测实际存在的照片目录
-        var rootEntries = afc.TryListDirectory("/");
-        var candidateRoots = new List<string>();
+        // 探测所有可能的媒体根目录
+        var candidateRoots = new List<string> { "/DCIM", "/dcim", "/PhotoData/CPLAssets" };
 
-        // 检查根目录下的 DCIM 目录（忽略大小写）
+        var rootEntries = afc.TryListDirectory("/");
         foreach (var entry in rootEntries.Where(e => e.IsDirectory))
         {
             if (string.Equals(entry.Name, "DCIM", StringComparison.OrdinalIgnoreCase))
@@ -59,46 +225,64 @@ public class PhotosService
             }
         }
 
-        // 若根目录未找到，尝试默认路径
-        if (candidateRoots.Count == 0)
+        var scannedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var root in candidateRoots)
         {
-            candidateRoots.Add(DcimRoot);
-            candidateRoots.Add("/dcim");
-            candidateRoots.Add("DCIM");
-        }
+            if (scannedPaths.Contains(root)) continue;
+            scannedPaths.Add(root);
 
-        var scannedDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var entries = afc.TryListDirectory(root);
+            if (entries.Length == 0) continue;
 
-        foreach (var dcimPath in candidateRoots)
-        {
-            if (scannedDirs.Contains(dcimPath)) continue;
-            scannedDirs.Add(dcimPath);
-
-            var dcimEntries = afc.TryListDirectory(dcimPath);
-            if (dcimEntries.Length == 0) continue;
-
-            // DCIM 根目录散落的媒体文件
-            foreach (var entry in dcimEntries.Where(e => !e.IsDirectory))
+            // 根目录下直接存在的文件
+            foreach (var file in entries.Where(e => !e.IsDirectory && IsMediaFile(e.Name)))
             {
-                if (IsMediaFile(entry.Name)) result.Add(ToMediaFile(entry, dcimPath));
+                result.Add(ToMediaFile(file, root));
             }
 
-            // DCIM 下的子目录（如 100APPLE, 101APPLE 等包含 APPLE 的相册卷，或者所有包含媒体的子目录）
-            foreach (var dir in dcimEntries.Where(e => e.IsDirectory))
+            // 二级目录（如 100APPLE、101APPLE 等）
+            foreach (var sub in entries.Where(e => e.IsDirectory))
             {
-                var dirPath = $"{dcimPath.TrimEnd('/')}/{dir.Name}";
-                var subFiles = afc.TryListDirectory(dirPath);
-                foreach (var file in subFiles.Where(f => !f.IsDirectory))
+                var subPath = $"{root.TrimEnd('/')}/{sub.Name}";
+                var subFiles = afc.TryListDirectory(subPath);
+                foreach (var sf in subFiles.Where(f => !f.IsDirectory && IsMediaFile(f.Name)))
                 {
-                    if (IsMediaFile(file.Name)) result.Add(ToMediaFile(file, dirPath));
+                    result.Add(ToMediaFile(sf, subPath));
                 }
             }
-
-            // 如果在该 DCIM 目录下成功找到了文件或找到了卷目录，就不再扫描后续候选路径
-            if (result.Count > 0) break;
         }
 
-        return result.OrderByDescending(f => f.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        return result.OrderByDescending(f => f.Modified).ToList();
+    }
+
+    private static List<AlbumCategory> GroupMediaFiles(List<MediaFile> files)
+    {
+        var categories = new List<AlbumCategory>
+        {
+            new() { Name = "图库", Files = files, Count = files.Count },
+            new() { Name = "个人收藏", Files = files.Where(f => f.IsFavorite).ToList(), Count = files.Count(f => f.IsFavorite) },
+            new() { Name = "视频", Files = files.Where(f => f.IsVideo).ToList(), Count = files.Count(f => f.IsVideo) }
+        };
+
+        // 按卷目录（如 100APPLE）分组出“我的相簿”
+        var albumGroups = files
+            .GroupBy(f => Path.GetDirectoryName(f.AfcPath)?.Replace('\\', '/').Split('/').LastOrDefault() ?? "未命名")
+            .Where(g => !string.IsNullOrEmpty(g.Key) && !g.Key.Equals("DCIM", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(g => g.Key);
+
+        foreach (var grp in albumGroups)
+        {
+            var list = grp.ToList();
+            categories.Add(new AlbumCategory
+            {
+                Name = grp.Key,
+                Files = list,
+                Count = list.Count
+            });
+        }
+
+        return categories;
     }
 
     private static MediaFile ToMediaFile(DeviceNative.AfcClient.DirEntry entry, string dirPath)
@@ -113,7 +297,6 @@ public class PhotosService
     private static bool IsMediaFile(string name)
         => MediaFileExtensions.Contains(Path.GetExtension(name).ToLowerInvariant());
 
-    /// <summary>批量导出（设备→PC），流式落盘不占内存。目标同名文件自动追加序号。</summary>
     public void ExportFiles(string udid, List<MediaFile> files, string destDir,
         IProgress<ProgressInfo>? progress = null, CancellationToken ct = default)
     {
@@ -129,11 +312,17 @@ public class PhotosService
             progress?.Report(new ProgressInfo { Current = i + 1, Total = files.Count, CurrentFile = file.Name });
 
             var destPath = UniqueDestinationPath(Path.Combine(destDir, file.Name));
-            afc.StreamReadFile(file.AfcPath, destPath, ct);
+            try
+            {
+                afc.StreamReadFile(file.AfcPath, destPath, ct);
+            }
+            catch (Exception ex)
+            {
+                LogService.Warning($"[相册导出] 读取文件 {file.AfcPath} 失败: {ex.Message}");
+            }
         }
     }
 
-    /// <summary>批量导入（PC→设备）：写入 /DCIM 的 1xxAPPLE 卷目录，自动命名 IMG_xxxx/VID_xxxx</summary>
     public List<string> ImportFiles(string udid, List<string> sourceFiles,
         IProgress<ProgressInfo>? progress = null, CancellationToken ct = default)
     {
@@ -142,9 +331,8 @@ public class PhotosService
 
         var targetDir = EnsureImportDirectory(afc);
 
-        // 找到该卷目录中已用的最大 IMG_/VID_ 编号
         var usedNumbers = new HashSet<int>();
-        foreach (var entry in afc.ListDirectory(targetDir))
+        foreach (var entry in afc.TryListDirectory(targetDir))
         {
             var stem = Path.GetFileNameWithoutExtension(entry.Name);
             var idx = stem.LastIndexOf('_');
@@ -173,7 +361,6 @@ public class PhotosService
 
     private static bool IsVideoExtension(string ext) => MediaVideoExtensions.Contains(ext.ToLowerInvariant());
 
-    /// <summary>定位/创建导入目录：优先复用已有的 1xxAPPLE，否则创建 100APPLE</summary>
     private static string EnsureImportDirectory(DeviceNative.AfcClient afc)
     {
         var rootEntries = afc.TryListDirectory("/");

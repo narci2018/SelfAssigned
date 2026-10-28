@@ -62,3 +62,18 @@ public class DaysRemainingBrushConverter : IValueConverter
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
         => throw new NotSupportedException();
 }
+
+/// <summary>视频指示颜色（视频 紫色，图片 灰色/蓝色）</summary>
+public class BoolToVideoBrushConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        var isVideo = value is true;
+        return isVideo
+            ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x93, 0x33, 0xEA)) // 紫色
+            : new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x3B, 0x82, 0xF6)); // 蓝色
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+}

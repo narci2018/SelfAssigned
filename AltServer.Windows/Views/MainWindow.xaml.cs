@@ -368,6 +368,16 @@ public partial class MainWindow : Window
         ViewModel.OpenPhotosWindow();
     }
 
+    private void OnDeviceDetail(object sender, RoutedEventArgs e)
+    {
+        ViewModel.OpenDeviceDetailWindow();
+    }
+
+    private void OnFileSystem(object sender, RoutedEventArgs e)
+    {
+        ViewModel.OpenFileSystemWindow();
+    }
+
     private void OnCopyAllLogs(object sender, RoutedEventArgs e)
     {
         var text = string.Join(Environment.NewLine, ViewModel.LogEntries);

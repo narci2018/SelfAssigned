@@ -1,0 +1,131 @@
+<Window x:Class="AltServer.Windows.Views.FileSystemWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="文件管理 / 虚拟U盘" Height="650" Width="920" MinHeight="480" MinWidth="680"
+        WindowStartupLocation="CenterOwner" Background="#F8FAFC">
+
+    <Window.Resources>
+        <Style x:Key="ActionButton" TargetType="Button">
+            <Setter Property="Background" Value="White" />
+            <Setter Property="BorderBrush" Value="#CBD5E1" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="12,6" />
+            <Setter Property="Margin" Value="0,0,6,0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="#F1F5F9" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="PrimaryButton" TargetType="Button">
+            <Setter Property="Background" Value="#2563EB" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Padding" Value="14,6" />
+            <Setter Property="Margin" Value="0,0,6,0" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border" Background="{TemplateBinding Background}"
+                                CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="#1D4ED8" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- 顶部操作栏 -->
+        <DockPanel Grid.Row="0" Margin="0,0,0,10">
+            <StackPanel>
+                <TextBlock Text="虚拟 U 盘 / 文件系统" FontSize="18" FontWeight="Bold" Foreground="#0F172A" />
+                <TextBlock x:Name="DeviceText" Text="" FontSize="12" Foreground="#64748B" />
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
+                <Button Content="⬆ 上传文件" Click="OnUploadFile" Style="{StaticResource PrimaryButton}" />
+                <Button Content="📁 新建文件夹" Click="OnNewFolder" Style="{StaticResource ActionButton}" />
+                <Button Content="⬇ 导出选中" Click="OnExportSelected" Style="{StaticResource ActionButton}" />
+                <Button Content="🗑 删除选中" Click="OnDeleteSelected" Style="{StaticResource ActionButton}" Foreground="#DC2626" />
+                <Button Content="刷新" Click="OnRefresh" Style="{StaticResource ActionButton}" />
+            </StackPanel>
+        </DockPanel>
+
+        <!-- 路径导航栏 -->
+        <Border Grid.Row="1" Background="White" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="6" Padding="8,5" Margin="0,0,0,10">
+            <DockPanel>
+                <Button Content="⬅ 返回上级" Click="OnGoBack" Padding="8,3" Margin="0,0,8,0"
+                        Background="#F1F5F9" BorderThickness="0" Cursor="Hand" />
+                <TextBlock Text="当前路径: " FontSize="12" Foreground="#64748B" VerticalAlignment="Center" />
+                <TextBlock x:Name="CurrentPathText" Text="/" FontSize="12" FontWeight="SemiBold" Foreground="#2563EB" VerticalAlignment="Center" />
+            </DockPanel>
+        </Border>
+
+        <!-- 文件与目录列表 -->
+        <Border Grid.Row="2" Background="White" CornerRadius="8" BorderBrush="#E2E8F0" BorderThickness="1" Padding="8">
+            <ListView x:Name="FilesList" SelectionMode="Extended" MouseDoubleClick="OnItemDoubleClick"
+                      ScrollViewer.VerticalScrollBarVisibility="Auto">
+                <ListView.View>
+                    <GridView>
+                        <GridViewColumn Header="名称" Width="380">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding Icon}" Margin="0,0,6,0" FontSize="14" VerticalAlignment="Center" />
+                                        <TextBlock Text="{Binding Name}" FontWeight="Medium" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
+                        <GridViewColumn Header="类型" Width="90" DisplayMemberBinding="{Binding TypeText}" />
+                        <GridViewColumn Header="大小" Width="100" DisplayMemberBinding="{Binding SizeText}" />
+                        <GridViewColumn Header="修改时间" Width="180" DisplayMemberBinding="{Binding ModifiedText}" />
+                    </GridView>
+                </ListView.View>
+            </ListView>
+        </Border>
+
+        <!-- 状态栏 -->
+        <StackPanel Grid.Row="3" Margin="0,10,0,0">
+            <TextBlock x:Name="StatusText" Text="就绪" FontSize="12" Foreground="#475569" Margin="0,0,0,6" />
+            <ProgressBar x:Name="ProgressBar" Height="6" Minimum="0" Maximum="100"
+                         Background="#E2E8F0" Foreground="#2563EB" Value="0" />
+        </StackPanel>
+
+        <!-- 提示 -->
+        <Border Grid.Row="4" Background="#EFF6FF" CornerRadius="6" Padding="10,6" Margin="0,8,0,0">
+            <TextBlock FontSize="11" Foreground="#1E40AF"
+                       Text="提示：双击文件夹可进入，支持向 iOS 存储空间存入文档、音频、压缩包等各类文件，作为移动虚拟U盘使用。" />
+        </Border>
+    </Grid>
+</Window>

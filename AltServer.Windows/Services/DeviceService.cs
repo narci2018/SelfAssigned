@@ -497,6 +497,130 @@ public class DeviceService
         return psi;
     }
 
+    /// <summary>获取设备详细全套信息（电池、存储、硬件型号、网络等，对标爱思助手“我的设备”）</summary>
+    public DeviceDetailInfo GetDeviceDetailInfo(string udid)
+    {
+        var info = new DeviceDetailInfo { Udid = udid };
+
+        try
+        {
+            var rawAll = RunToolNoThrow("ideviceinfo", $"-u {udid}", timeoutMs: 12_000);
+            var dict = ParseKeyValueOutput(rawAll);
+
+            if (dict.TryGetValue("DeviceName", out var dn)) info.DeviceName = dn;
+            if (dict.TryGetValue("ProductType", out var pt)) info.ProductType = pt;
+            if (dict.TryGetValue("ProductVersion", out var pv)) info.ProductVersion = pv;
+            if (dict.TryGetValue("BuildVersion", out var bv)) info.BuildVersion = bv;
+            if (dict.TryGetValue("ModelNumber", out var mn)) info.ModelNumber = mn;
+            if (dict.TryGetValue("SerialNumber", out var sn)) info.SerialNumber = sn;
+            if (dict.TryGetValue("CPUArchitecture", out var cpu)) info.CpuArchitecture = cpu;
+            if (dict.TryGetValue("HardwareModel", out var hm)) info.HardwareModel = hm;
+            if (dict.TryGetValue("RegionInfo", out var ri)) info.RegionInfo = ri;
+            if (dict.TryGetValue("RegulatoryModelNumber", out var rmn)) info.RegulatoryModelNumber = rmn;
+            if (dict.TryGetValue("PhoneNumber", out var pn)) info.PhoneNumber = pn;
+            if (dict.TryGetValue("BasebandVersion", out var bb)) info.BasebandVersion = bb;
+            if (dict.TryGetValue("BluetoothAddress", out var bt)) info.BluetoothAddress = bt;
+            if (dict.TryGetValue("WiFiAddress", out var wf)) info.WiFiAddress = wf;
+            if (dict.TryGetValue("EthernetAddress", out var ea)) info.EthernetAddress = ea;
+            if (dict.TryGetValue("InternationalMobileEquipmentIdentity", out var imei)) info.InternationalMobileEquipmentIdentity = imei;
+            if (dict.TryGetValue("ActivationState", out var act)) info.ActivationState = act;
+            if (dict.TryGetValue("CarrierBundleInfoArray", out var car)) info.CarrierName = car;
+
+            // 映射常见友好型号名（如 iPhone13,2 -> iPhone 12）
+            info.ModelName = MapFriendlyModelName(info.ProductType);
+        }
+        catch (Exception ex)
+        {
+            LogService.Warning($"[设备详情] 读取基础信息异常: {ex.Message}");
+        }
+
+        // 读取电池详情
+        try
+        {
+            var rawBattery = RunToolNoThrow("ideviceinfo", $"-u {udid} -q com.apple.mobile.battery", timeoutMs: 8_000);
+            var bDict = ParseKeyValueOutput(rawBattery);
+            if (bDict.TryGetValue("CurrentCapacity", out var cc) && int.TryParse(cc, out var cci)) info.BatteryCurrentCapacity = cci;
+            if (bDict.TryGetValue("IsCharging", out var ic)) info.BatteryIsCharging = ic.Equals("true", StringComparison.OrdinalIgnoreCase);
+            if (bDict.TryGetValue("CycleCount", out var cyc) && int.TryParse(cyc, out var cyci)) info.BatteryCycleCount = cyci;
+            if (bDict.TryGetValue("DesignCapacity", out var dc) && int.TryParse(dc, out var dci)) info.BatteryDesignCapacity = dci;
+            if (bDict.TryGetValue("FullAvailableCapacity", out var fac) && int.TryParse(fac, out var faci)) info.BatteryFullAvailableCapacity = faci;
+        }
+        catch { }
+
+        // 读取存储详情
+        try
+        {
+            var rawDisk = RunToolNoThrow("ideviceinfo", $"-u {udid} -q com.apple.disk_usage", timeoutMs: 8_000);
+            var dDict = ParseKeyValueOutput(rawDisk);
+            if (dDict.TryGetValue("TotalDiskCapacity", out var tdc) && long.TryParse(tdc, out var tdcl)) info.TotalDiskCapacity = tdcl;
+            if (dDict.TryGetValue("TotalDataCapacity", out var tdat) && long.TryParse(tdat, out var tdatl)) info.TotalDataCapacity = tdatl;
+            if (dDict.TryGetValue("TotalDataAvailable", out var tda) && long.TryParse(tda, out var tdal)) info.TotalDataAvailable = tdal;
+            if (dDict.TryGetValue("AmountDataReserved", out var adr) && long.TryParse(adr, out var adrl)) info.AmountDataReserved = adrl;
+        }
+        catch { }
+
+        return info;
+    }
+
+    private static Dictionary<string, string> ParseKeyValueOutput(string text)
+    {
+        var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(text)) return dict;
+
+        var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var line in lines)
+        {
+            var idx = line.IndexOf(':');
+            if (idx > 0)
+            {
+                var key = line[..idx].Trim();
+                var val = line[(idx + 1)..].Trim();
+                dict[key] = val;
+            }
+        }
+        return dict;
+    }
+
+    private static string MapFriendlyModelName(string productType)
+    {
+        return productType switch
+        {
+            "iPhone13,1" => "iPhone 12 mini",
+            "iPhone13,2" => "iPhone 12",
+            "iPhone13,3" => "iPhone 12 Pro",
+            "iPhone13,4" => "iPhone 12 Pro Max",
+            "iPhone14,4" => "iPhone 13 mini",
+            "iPhone14,5" => "iPhone 13",
+            "iPhone14,2" => "iPhone 13 Pro",
+            "iPhone14,3" => "iPhone 13 Pro Max",
+            "iPhone14,7" => "iPhone 14",
+            "iPhone14,8" => "iPhone 14 Plus",
+            "iPhone15,2" => "iPhone 14 Pro",
+            "iPhone15,3" => "iPhone 14 Pro Max",
+            "iPhone15,4" => "iPhone 15",
+            "iPhone15,5" => "iPhone 15 Plus",
+            "iPhone16,1" => "iPhone 15 Pro",
+            "iPhone16,2" => "iPhone 15 Pro Max",
+            "iPhone17,1" => "iPhone 16 Pro",
+            "iPhone17,2" => "iPhone 16 Pro Max",
+            "iPhone17,3" => "iPhone 16",
+            "iPhone17,4" => "iPhone 16 Plus",
+            "iPhone12,1" => "iPhone 11",
+            "iPhone12,3" => "iPhone 11 Pro",
+            "iPhone12,5" => "iPhone 11 Pro Max",
+            "iPhone11,8" => "iPhone XR",
+            "iPhone11,2" => "iPhone XS",
+            "iPhone11,4" or "iPhone11,6" => "iPhone XS Max",
+            "iPhone10,1" or "iPhone10,4" => "iPhone 8",
+            "iPhone10,2" or "iPhone10,5" => "iPhone 8 Plus",
+            "iPhone10,3" or "iPhone10,6" => "iPhone X",
+            "iPad5,1" or "iPad5,2" => "iPad mini 4",
+            "iPad11,1" or "iPad11,2" => "iPad mini 5",
+            "iPad14,1" or "iPad14,2" => "iPad mini 6",
+            _ => productType
+        };
+    }
+
     private string RunTool(string toolName, string arguments, int timeoutMs)
     {
         var toolPath = Path.Combine(_toolsDir, $"{toolName}.exe");

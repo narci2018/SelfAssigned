@@ -1265,6 +1265,22 @@ public class MainViewModel : ObservableObject
             null);
     }
 
+    /// <summary>打开设备详细信息面板（仿爱思助手“我的设备”）</summary>
+    public void OpenDeviceDetailWindow()
+    {
+        if (!EnsureSelectedDevice()) return;
+        OpenFeatureWindow("device_detail", () => new DeviceDetailWindow(SelectedDevice!, _devices),
+            null);
+    }
+
+    /// <summary>打开虚拟 U 盘 / 文件系统管理窗口</summary>
+    public void OpenFileSystemWindow()
+    {
+        if (!EnsureSelectedDevice()) return;
+        OpenFeatureWindow("filesystem", () => new FileSystemWindow(SelectedDevice!),
+            null);
+    }
+
     private bool EnsureSelectedDevice()
     {
         if (SelectedDevice is not null) return true;

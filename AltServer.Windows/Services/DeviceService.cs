@@ -47,35 +47,30 @@ public class DeviceService
 
             try
             {
-                var name = RunTool("ideviceinfo", $"-u {udid} -k DeviceName", timeoutMs: 10_000).Trim();
-                if (IsValidInfoValue(name)) device.Name = name;
+                // 一次性获取全量属性，避免多次反复调用外部进程造成 UI 严重卡顿
+                var rawAll = RunToolNoThrow("ideviceinfo", $"-u {udid}", timeoutMs: 5_000);
+                var dict = ParseKeyValueOutput(rawAll);
 
-                var model = RunTool("ideviceinfo", $"-u {udid} -k ModelNumber", timeoutMs: 10_000).Trim();
-                if (IsValidInfoValue(model)) device.Model = model;
+                if (dict.TryGetValue("DeviceName", out var name) && IsValidInfoValue(name)) device.Name = name;
+                if (dict.TryGetValue("ModelNumber", out var model) && IsValidInfoValue(model)) device.Model = model;
+                if (dict.TryGetValue("ProductType", out var product) && IsValidInfoValue(product)) device.ProductType = product;
+                if (dict.TryGetValue("ProductVersion", out var os) && IsValidInfoValue(os)) device.OsVersion = os;
+                if (dict.TryGetValue("SerialNumber", out var serial) && IsValidInfoValue(serial)) device.Serial = serial;
 
-                var product = RunTool("ideviceinfo", $"-u {udid} -k ProductType", timeoutMs: 10_000).Trim();
-                if (IsValidInfoValue(product)) device.ProductType = product;
+                if (dict.Count == 0)
+                {
+                    // 若无配对或受限，尝试简版模式 -s
+                    var rawSimple = RunToolNoThrow("ideviceinfo", $"-u {udid} -s", timeoutMs: 3_000);
+                    var dictSimple = ParseKeyValueOutput(rawSimple);
+                    if (dictSimple.TryGetValue("ProductType", out var pSimple) && IsValidInfoValue(pSimple)) device.ProductType = pSimple;
+                    if (dictSimple.TryGetValue("ProductVersion", out var osSimple) && IsValidInfoValue(osSimple)) device.OsVersion = osSimple;
+                }
 
-                var os = RunTool("ideviceinfo", $"-u {udid} -k ProductVersion", timeoutMs: 10_000).Trim();
-                if (IsValidInfoValue(os)) device.OsVersion = os;
-
-                var serial = RunTool("ideviceinfo", $"-u {udid} -k SerialNumber", timeoutMs: 10_000).Trim();
-                if (IsValidInfoValue(serial)) device.Serial = serial;
-
-                device.IsPaired = IsPaired(udid);
+                device.IsPaired = dict.Count > 0;
             }
             catch
             {
-                // 如果常规查询失败（如尚未配对），尝试无需配对的简单模式(-s)读取型号与系统版本
-                try
-                {
-                    var product = RunToolNoThrow("ideviceinfo", $"-u {udid} -s -k ProductType", timeoutMs: 5_000).Trim();
-                    if (IsValidInfoValue(product)) device.ProductType = product;
-
-                    var os = RunToolNoThrow("ideviceinfo", $"-u {udid} -s -k ProductVersion", timeoutMs: 5_000).Trim();
-                    if (IsValidInfoValue(os)) device.OsVersion = os;
-                }
-                catch { }
+                // 异常保底
             }
 
             // 无论如何保证有一个非空的识别名称
@@ -581,7 +576,7 @@ public class DeviceService
         return info;
     }
 
-    private static Dictionary<string, string> ParseKeyValueOutput(string text)
+    public static Dictionary<string, string> ParseKeyValueOutput(string text)
     {
         var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (string.IsNullOrWhiteSpace(text)) return dict;
@@ -803,7 +798,7 @@ public class DeviceService
     /// 执行工具但允许非零退出码（如 ideviceinstaller -l 可能返回 1 但仍输出数据）。
     /// 超时时仍抛 TimeoutException。
     /// </summary>
-    private string RunToolNoThrow(string toolName, string arguments, int timeoutMs)
+    public string RunToolNoThrow(string toolName, string arguments, int timeoutMs)
     {
         var toolPath = Path.Combine(_toolsDir, $"{toolName}.exe");
 

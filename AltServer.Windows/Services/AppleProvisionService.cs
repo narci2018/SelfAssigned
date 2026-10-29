@@ -781,6 +781,8 @@ public class AppleProvisionService
     private async Task<Dictionary<string, object>> SendXcodeRequestAsync(string action, Dictionary<string, object> parameters)
     {
         var url = $"{XCODE_SERVICES_BASE}/{action}?clientId={CLIENT_ID}";
+        parameters["clientId"] = CLIENT_ID;
+        parameters["protocolVersion"] = PROTOCOL_VERSION;
         var plistXml = BuildPlist(parameters);
         var request = new HttpRequestMessage(HttpMethod.Post, url)
         {

@@ -89,7 +89,7 @@ public class MainViewModel : ObservableObject
             }
         };
 
-        _devicePollTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+        _devicePollTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         _devicePollTimer.Tick += (_, _) => PollDevices();
 
         // 过期提醒巡检：每小时检查一次（托盘气泡 24 小时内只弹一次）
@@ -143,6 +143,10 @@ public class MainViewModel : ObservableObject
         set => SetField(ref _currentNavView, value);
     }
 
+    private readonly Dictionary<string, List<InstalledApp>> _installedAppsCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DeviceDetailInfo> _deviceDetailCache = new(StringComparer.OrdinalIgnoreCase);
+    private bool _isLoadingApps = false;
+
     private DeviceDetailInfo? _selectedDeviceDetail;
     /// <summary>当前选中的设备详细全套信息（电池、存储、硬件等）</summary>
     public DeviceDetailInfo? SelectedDeviceDetail
@@ -151,7 +155,7 @@ public class MainViewModel : ObservableObject
         set => SetField(ref _selectedDeviceDetail, value);
     }
 
-    public async Task RefreshSelectedDeviceDetailAsync()
+    public async Task RefreshSelectedDeviceDetailAsync(bool forceRefresh = false)
     {
         if (SelectedDevice is null)
         {
@@ -159,10 +163,24 @@ public class MainViewModel : ObservableObject
             return;
         }
 
+        var udid = SelectedDevice.Udid;
+        if (!forceRefresh && _deviceDetailCache.TryGetValue(udid, out var cached))
+        {
+            SelectedDeviceDetail = cached;
+            return;
+        }
+
         try
         {
-            var info = await Task.Run(() => _devices.GetDeviceDetailInfo(SelectedDevice.Udid));
-            SelectedDeviceDetail = info;
+            var info = await Task.Run(() => _devices.GetDeviceDetailInfo(udid));
+            if (info != null)
+            {
+                _deviceDetailCache[udid] = info;
+                if (SelectedDevice?.Udid == udid)
+                {
+                    SelectedDeviceDetail = info;
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -187,6 +205,12 @@ public class MainViewModel : ObservableObject
         get => _selectedDevice;
         set
         {
+            if (_selectedDevice?.Udid == value?.Udid && _selectedDevice != null && value != null)
+            {
+                // UDID 相同，无须重复触发耗时的重新加载
+                return;
+            }
+
             if (SetField(ref _selectedDevice, value))
             {
                 // 切换设备时加载该设备的专属证书配置到全局字段（供 UI 绑定显示）
@@ -202,8 +226,8 @@ public class MainViewModel : ObservableObject
                         OnPropertyChanged(nameof(MobileProvisionPath));
                     }
                 }
-                LoadDeviceApp();
-                _ = RefreshSelectedDeviceDetailAsync();
+                LoadDeviceApp(forceRefresh: false);
+                _ = RefreshSelectedDeviceDetailAsync(forceRefresh: false);
             }
         }
     }
@@ -857,58 +881,105 @@ public class MainViewModel : ObservableObject
 
     // MARK: - 设备管理
 
-    private void PollDevices()
+    private bool _isPollingDevices = false;
+
+    private async void PollDevices()
     {
-        // 降低轮询频率：只有当界面可见时才主动刷新
-        if (!IsVisible) return;
+        // 降低轮询频率：只有当界面可见时才刷新，且防止并发重入
+        if (!IsVisible || _isPollingDevices) return;
+        _isPollingDevices = true;
 
         try
         {
-            var devices = _devices.ListDevices();
+            var (newDevices, connectedUdids) = await Task.Run(() =>
+            {
+                var udidOutput = _devices.RunToolNoThrow("idevice_id", "-l", timeoutMs: 3_000);
+                var udids = udidOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                                      .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            // 更新已有设备
-                foreach (var device in devices)
+                var list = new List<Device>();
+                foreach (var udid in udids)
                 {
-                    // 同步"绑定账号"标签（多账号管理）
-                    device.AccountName = _settings.Data.GetAccountForDevice(device.Udid);
+                    // 检查 UI 现存列表中是否已有此设备
+                    var current = System.Windows.Application.Current?.Dispatcher?.Invoke(() =>
+                        Devices.FirstOrDefault(d => d.Udid.Equals(udid, StringComparison.OrdinalIgnoreCase)));
 
-                    var existing = Devices.FirstOrDefault(d => d.Udid == device.Udid);
-                    if (existing is null)
+                    if (current != null && !string.IsNullOrEmpty(current.Name) && !current.Name.StartsWith("0000"))
                     {
-                        Devices.Add(device);
-                        var bound = _settings.Data.GetAccountForDevice(device.Udid);
-                        LogService.Info($"检测到设备: {device.Name} ({device.Udid[..Math.Min(8, device.Udid.Length)]}...)" +
-                                        (bound is null ? "" : $" [账号: {bound}]"));
-
-                        if (Devices.Count == 1)
-                        {
-                            SelectedDevice = device;
-                        }
+                        list.Add(current);
                     }
                     else
                     {
-                        existing.Name = device.Name;
-                        existing.Model = device.Model;
-                        existing.OsVersion = device.OsVersion;
-                        existing.IsPaired = device.IsPaired;
-                        existing.AccountName = device.AccountName;
+                        // 新发现设备，单次调用 ideviceinfo 读取所有字段
+                        var newDev = new Device { Udid = udid, Connection = ConnectionType.Usb };
+                        var rawAll = _devices.RunToolNoThrow("ideviceinfo", $"-u {udid}", timeoutMs: 5_000);
+                        var dict = DeviceService.ParseKeyValueOutput(rawAll);
+
+                        if (dict.TryGetValue("DeviceName", out var name) && !string.IsNullOrWhiteSpace(name)) newDev.Name = name;
+                        if (dict.TryGetValue("ModelNumber", out var model) && !string.IsNullOrWhiteSpace(model)) newDev.Model = model;
+                        if (dict.TryGetValue("ProductType", out var prod) && !string.IsNullOrWhiteSpace(prod)) newDev.ProductType = prod;
+                        if (dict.TryGetValue("ProductVersion", out var os) && !string.IsNullOrWhiteSpace(os)) newDev.OsVersion = os;
+                        if (dict.TryGetValue("SerialNumber", out var sn) && !string.IsNullOrWhiteSpace(sn)) newDev.Serial = sn;
+
+                        if (string.IsNullOrWhiteSpace(newDev.Name))
+                            newDev.Name = newDev.ProductType ?? udid[..Math.Min(8, udid.Length)];
+
+                        newDev.IsPaired = dict.Count > 0;
+                        list.Add(newDev);
                     }
                 }
+                return (list, udids);
+            });
+
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher is null) return;
+
+            // 检查是否有任何变化
+            var currentUdids = Devices.Select(d => d.Udid).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (currentUdids.SetEquals(connectedUdids) && Devices.All(d => !string.IsNullOrEmpty(d.Name)))
+            {
+                // 设备列表无变化，直接返回，避免任何 UI 刷新与线程开销
+                return;
+            }
+
+            // 更新或添加
+            foreach (var device in newDevices)
+            {
+                device.AccountName = _settings.Data.GetAccountForDevice(device.Udid);
+                var existing = Devices.FirstOrDefault(d => d.Udid.Equals(device.Udid, StringComparison.OrdinalIgnoreCase));
+                if (existing is null)
+                {
+                    Devices.Add(device);
+                    var bound = _settings.Data.GetAccountForDevice(device.Udid);
+                    LogService.Info($"检测到设备: {device.Name} ({device.Udid[..Math.Min(8, device.Udid.Length)]}...)" +
+                                    (bound is null ? "" : $" [账号: {bound}]"));
+
+                    if (SelectedDevice is null)
+                    {
+                        SelectedDevice = device;
+                    }
+                }
+            }
 
             // 移除断开设备
-            var connectedUdids = devices.Select(d => d.Udid).ToHashSet();
             var disconnected = Devices.Where(d => !connectedUdids.Contains(d.Udid)).ToArray();
             foreach (var device in disconnected)
             {
                 Devices.Remove(device);
                 LogService.Warning($"设备已断开: {device.Name}");
+                if (SelectedDevice?.Udid == device.Udid)
+                {
+                    SelectedDevice = Devices.FirstOrDefault();
+                }
             }
         }
         catch (Exception ex)
         {
-            // 工具缺失时静默处理，避免刷屏
-            // ToolsStatus 已在 VerifyTools 中提示
             _ = ex;
+        }
+        finally
+        {
+            _isPollingDevices = false;
         }
     }
 
@@ -983,51 +1054,43 @@ public class MainViewModel : ObservableObject
         }
     }
 
-    public void LoadDeviceApp()
+    public void LoadDeviceApp(bool forceRefresh = false)
     {
         var device = SelectedDevice;
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
-        if (dispatcher is not null && !dispatcher.CheckAccess())
-        {
-            dispatcher.Invoke(() => InstalledApps.Clear());
-        }
-        else
-        {
-            InstalledApps.Clear();
-        }
+
         DeviceName = device?.Name ?? string.Empty;
         OsVersion = device?.OsVersion ?? string.Empty;
 
-        if (device is null) return;
-
-        // 第一步：立即从本地注册表加载（不依赖 ideviceinstaller，无延迟）
-        var registryApps = _registry.GetInstalledApps(device.Udid);
-        if (registryApps.Count > 0)
+        if (device is null)
         {
-            var registryInstalled = registryApps.Select(a => new InstalledApp
-            {
-                BundleIdentifier = a.BundleId,
-                Name = a.AppName,
-                Version = string.Empty,
-                Build = string.Empty
-            }).ToList();
-
             if (dispatcher is not null && !dispatcher.CheckAccess())
-            {
-                dispatcher.Invoke(() =>
-                {
-                    InstalledApps.Clear();
-                    foreach (var app in registryInstalled) InstalledApps.Add(app);
-                });
-            }
+                dispatcher.Invoke(() => InstalledApps.Clear());
             else
-            {
                 InstalledApps.Clear();
-                foreach (var app in registryInstalled) InstalledApps.Add(app);
-            }
+            return;
         }
 
-        // 第二步：异步用 ideviceinstaller 刷新（补充版本号等信息，超时不影响UI）
+        // 1. 如果已有内存缓存且不是强制刷新，立即秒开显示，杜绝“时而1时而68”闪烁
+        if (!forceRefresh && _installedAppsCache.TryGetValue(device.Udid, out var cached) && cached.Count > 0)
+        {
+            void ApplyCached()
+            {
+                InstalledApps.Clear();
+                foreach (var app in cached) InstalledApps.Add(app);
+            }
+
+            if (dispatcher is not null && !dispatcher.CheckAccess())
+                dispatcher.Invoke(ApplyCached);
+            else
+                ApplyCached();
+            return;
+        }
+
+        // 避免重复并发调用 ideviceinstaller 造成进程互斥与超时
+        if (_isLoadingApps) return;
+        _isLoadingApps = true;
+
         Task.Run(() =>
         {
             try
@@ -1035,6 +1098,7 @@ public class MainViewModel : ObservableObject
                 var apps = _devices.ListInstalledApps(device.Udid);
                 if (apps.Count > 0)
                 {
+                    _installedAppsCache[device.Udid] = apps;
                     System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
                     {
                         InstalledApps.Clear();
@@ -1042,19 +1106,35 @@ public class MainViewModel : ObservableObject
                             InstalledApps.Add(app);
                     });
                 }
-            }
-            catch (TimeoutException)
-            {
-                // ideviceinstaller 超时很常见，本地注册表已先显示，此处静默忽略
-                LogService.Warning($"获取 {device.Name} 设备应用列表超时（已显示本地已安装记录）");
+                else
+                {
+                    // 仅当底层确实无结果且界面为空时，才读取本地记录保底
+                    var registryApps = _registry.GetInstalledApps(device.Udid);
+                    if (registryApps.Count > 0 && InstalledApps.Count == 0)
+                    {
+                        var registryInstalled = registryApps.Select(a => new InstalledApp
+                        {
+                            BundleIdentifier = a.BundleId,
+                            Name = a.AppName,
+                            Version = string.Empty,
+                            Build = string.Empty
+                        }).ToList();
+
+                        System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+                        {
+                            InstalledApps.Clear();
+                            foreach (var app in registryInstalled) InstalledApps.Add(app);
+                        });
+                    }
+                }
             }
             catch (Exception ex)
             {
-                // 其他错误也不覆盖已显示的注册表数据
-                if (registryApps.Count == 0)
-                {
-                    LogService.Error($"获取 {device.Name} 已安装应用失败: {ex.Message}");
-                }
+                LogService.Warning($"[应用管理] 获取设备应用列表异常: {ex.Message}");
+            }
+            finally
+            {
+                _isLoadingApps = false;
             }
         });
     }

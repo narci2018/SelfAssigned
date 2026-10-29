@@ -409,12 +409,12 @@ public partial class MainWindow : Window
 
     private void OnRefreshDeviceInfo(object sender, RoutedEventArgs e)
     {
-        _ = ViewModel.RefreshSelectedDeviceDetailAsync();
+        _ = ViewModel.RefreshSelectedDeviceDetailAsync(forceRefresh: true);
     }
 
     private void OnRefreshApps(object sender, RoutedEventArgs e)
     {
-        ViewModel.LoadDeviceApp();
+        ViewModel.LoadDeviceApp(forceRefresh: true);
     }
 
     private async void OnUninstallAppClick(object sender, RoutedEventArgs e)

@@ -296,12 +296,9 @@ public class AnisetteData
             ["X-Apple-I-TimeZone"] = TimeZone,
             ["X-Apple-Locale"] = Locale,
             ["X-Apple-I-MD"] = OneTimePassword,
-            ["X-Apple-I-MD-LU"] = LocalUserId,
             ["X-Apple-I-MD-M"] = MachineId,
             ["X-Apple-I-MD-RINFO"] = RoutingInfo.ToString(),
-            ["X-Apple-I-SRL-NO"] = SerialNumber,
             ["X-Mme-Device-Id"] = DeviceUniqueId,
-            ["X-MMe-Client-Info"] = ClientInfo,
         };
     }
 }

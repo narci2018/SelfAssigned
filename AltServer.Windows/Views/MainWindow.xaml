@@ -466,7 +466,7 @@
                                 <TextBlock Text="{Binding InstalledApps.Count, StringFormat='已在设备上检测到 {0} 个应用'}" FontSize="12" Foreground="#64748B" Margin="0,4,0,0" />
                             </StackPanel>
                             <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
-                                <Button Content="安装外部 IPA" Click="OnInstallIpa" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0" />
+                                <Button Content="前往自签名与安装" Click="OnJumpToSignInstall" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0" />
                                 <Button Content="刷新应用列表" Click="OnRefreshApps" Style="{StaticResource OutlineButton}" />
                             </StackPanel>
                         </DockPanel>

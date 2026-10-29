@@ -417,6 +417,46 @@ public partial class MainWindow : Window
         ViewModel.LoadDeviceApp();
     }
 
+    private async void OnUninstallAppClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button btn && btn.Tag is string bundleId && !string.IsNullOrEmpty(bundleId))
+        {
+            var app = ViewModel.InstalledApps.FirstOrDefault(a => a.BundleIdentifier == bundleId);
+            var appName = app?.Name ?? bundleId;
+
+            var confirm = System.Windows.MessageBox.Show(
+                $"确定要从设备上卸载应用「{appName}」({bundleId}) 吗？此操作无法撤销。",
+                "确认卸载",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (confirm != MessageBoxResult.Yes) return;
+
+            var udid = ViewModel.SelectedDevice?.Udid;
+            if (string.IsNullOrEmpty(udid))
+            {
+                System.Windows.MessageBox.Show("未选中设备", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            try
+            {
+                btn.IsEnabled = false;
+                btn.Content = "卸载中...";
+                var toolsDir = new SettingsService().ResolveToolsDir();
+                var devService = new DeviceService(toolsDir);
+                await Task.Run(() => devService.UninstallApp(udid, bundleId));
+                System.Windows.MessageBox.Show($"应用「{appName}」已成功卸载！", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                ViewModel.LoadDeviceApp();
+            }
+            finally
+            {
+                btn.IsEnabled = true;
+                btn.Content = "卸载";
+            }
+        }
+    }
+
     private void OnJumpToSignInstall(object sender, RoutedEventArgs e)
     {
         UpdateViewVisibility("sign_install");

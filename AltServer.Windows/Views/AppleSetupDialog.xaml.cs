@@ -273,7 +273,14 @@ public partial class AppleSetupDialog : Window
                 else
                 {
                     LogService.Warning($"[Setup] 自动配置提示: {provResult.ErrorMessage}");
-                    ShowError($"自动签名配置失败: {provResult.ErrorMessage}");
+                    if (provResult.ErrorMessage?.Contains("1100") == true)
+                    {
+                        ShowError("Apple ID 账号验证已通过，但开发者服务返回 1100 (会话未授权)。\n这通常是苹果对免费账号下发 Xcode 证书的临时风控限制。\n建议方案：\n1. 在「自签名与安装」页面直接导入已有 P12 证书与描述文件进行安装；\n2. 或稍后重试申请。");
+                    }
+                    else
+                    {
+                        ShowError($"自动签名配置失败: {provResult.ErrorMessage}");
+                    }
                     return;
                 }
             }

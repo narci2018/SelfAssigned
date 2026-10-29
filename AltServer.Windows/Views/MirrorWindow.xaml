@@ -32,35 +32,31 @@
 
             <!-- 无线 AirPlay 引导面板 (免阻塞弹窗) -->
             <Border x:Name="AirPlayGuidePanel" Background="#1E293B" CornerRadius="12" Margin="24"
-                    Padding="24" MaxWidth="420" VerticalAlignment="Center" HorizontalAlignment="Center"
+                    Padding="24" MaxWidth="440" VerticalAlignment="Center" HorizontalAlignment="Center"
                     BorderBrush="#334155" BorderThickness="1">
                 <StackPanel>
-                    <TextBlock Text="📺 高清无线投屏" FontSize="18" FontWeight="Bold" Foreground="#F8FAFC" HorizontalAlignment="Center" />
-                    <TextBlock Text="免开启开发者模式，超低延迟音画同步" FontSize="12" Foreground="#94A3B8"
+                    <TextBlock Text="📱 投屏与屏幕镜像说明" FontSize="17" FontWeight="Bold" Foreground="#F8FAFC" HorizontalAlignment="Center" />
+                    <TextBlock Text="iOS 17/18+ 系统级投屏机制" FontSize="12" Foreground="#94A3B8"
                                HorizontalAlignment="Center" Margin="0,6,0,16" />
 
-                    <Button Content="📡 启动 AirPlay 无线投屏" Click="OnStartAirPlay"
-                            Background="#2563EB" Foreground="White" FontWeight="SemiBold" FontSize="14"
-                            Padding="16,10" Cursor="Hand" Margin="0,0,0,16" BorderThickness="0">
-                        <Button.Resources>
-                            <Style TargetType="Border">
-                                <Setter Property="CornerRadius" Value="8" />
-                            </Style>
-                        </Button.Resources>
-                    </Button>
-
-                    <Border Background="#0F172A" CornerRadius="8" Padding="14,12" Margin="0,0,0,12">
+                    <Border Background="#0F172A" CornerRadius="8" Padding="16,14" Margin="0,0,0,14">
                         <StackPanel>
-                            <TextBlock Text="📱 投屏连接步骤：" FontSize="12" FontWeight="SemiBold" Foreground="#E2E8F0" Margin="0,0,0,6" />
-                            <TextBlock Text="1. 点击上方按钮启动投屏组件" FontSize="11" Foreground="#94A3B8" Margin="0,2" />
-                            <TextBlock Text="2. iPhone 从右上角向下滑出「控制中心」" FontSize="11" Foreground="#94A3B8" Margin="0,2" />
-                            <TextBlock Text="3. 点击「屏幕镜像」(两个小方块图标)" FontSize="11" Foreground="#94A3B8" Margin="0,2" />
-                            <TextBlock Text="4. 选择电脑名称，即可实时同步画面！" FontSize="11" Foreground="#10B981" FontWeight="Medium" Margin="0,2" />
+                            <TextBlock Text="📌 连接方式与说明：" FontSize="12" FontWeight="SemiBold" Foreground="#E2E8F0" Margin="0,0,0,8" />
+                            <TextBlock Text="• iOS 17/18 限制：苹果官方已在 iOS 17+ 废弃 USB 底层截屏通道 (screenshotr 错误 -27)。" FontSize="11" Foreground="#CBD5E1" TextWrapping="Wrap" Margin="0,3" />
+                            <TextBlock Text="• USB 有线流：需在手机「设置 > 隐私与安全性 > 开发者模式」中开启并重启设备。" FontSize="11" Foreground="#94A3B8" TextWrapping="Wrap" Margin="0,3" />
+                            <TextBlock Text="• 无线 AirPlay 镜像：iPhone 从右上角向下滑出「控制中心」，点击「屏幕镜像」即可直接无线同步投屏。" FontSize="11" Foreground="#38BDF8" TextWrapping="Wrap" Margin="0,3" />
                         </StackPanel>
                     </Border>
 
-                    <TextBlock Text="ℹ️ 如需使用 USB 有线截屏流，需在手机「设置 > 隐私与安全性 > 开发者模式」开启。"
-                               FontSize="10" Foreground="#64748B" TextWrapping="Wrap" HorizontalAlignment="Center" />
+                    <Button Content="🔄 重试连接检测" Click="OnRefreshOnce"
+                            Background="#3B82F6" Foreground="White" FontWeight="SemiBold" FontSize="13"
+                            Padding="16,8" Cursor="Hand" BorderThickness="0" HorizontalAlignment="Center">
+                        <Button.Resources>
+                            <Style TargetType="Border">
+                                <Setter Property="CornerRadius" Value="6" />
+                            </Style>
+                        </Button.Resources>
+                    </Button>
                 </StackPanel>
             </Border>
         </Grid>

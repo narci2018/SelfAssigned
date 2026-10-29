@@ -1,5 +1,9 @@
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 
 namespace AltServer.Windows.Services;
 
@@ -38,6 +42,10 @@ public static class CoreADIService
     /// <summary>Fetch anisette via a bundled CoreADI.dll. Returns null if unavailable.</summary>
     public static AnisetteData? TryFetchAnisette(string toolsDir)
     {
+        // 优先使用官方原版 iCloud Anisette.exe 执行体（若存在）
+        var fromExe = TryFetchFromAnisetteExe(toolsDir);
+        if (fromExe != null) return fromExe;
+
         try
         {
             var dllPath = LocateCoreAdiDll(toolsDir);
@@ -150,13 +158,13 @@ public static class CoreADIService
                 {
                     MachineId = Convert.ToBase64String(mid),
                     OneTimePassword = Convert.ToBase64String(otp),
-                    LocalUserId = "-2",
+                    LocalUserId = GetPersistentLocalUserId(),
                     RoutingInfo = routing,
-                    DeviceUniqueId = Guid.NewGuid().ToString("N")[..32],
-                    SerialNumber = "F2LX1234ABCD",
-                    ClientInfo = AnisetteData.DefaultClientInfo,
-                    Locale = "en_US",
-                    TimeZone = "UTC",
+                    DeviceUniqueId = GetPersistentDeviceId(),
+                    SerialNumber = "C02LKHBBFD57",
+                    ClientInfo = "<PC> <Windows;6.2(0,0);9200> <com.apple.AuthKitWin/1 (com.apple.iCloud/7.17)>",
+                    Locale = "en_GB",
+                    TimeZone = "GMT+0",
                     ClientTime = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
                 };
             }
@@ -237,4 +245,112 @@ public static class CoreADIService
 
     [DllImport("kernel32", SetLastError = true)]
     private static extern bool FreeLibrary(IntPtr hModule);
+
+    private static string? _cachedDeviceId;
+    private static string? _cachedLocalUserId;
+
+    public static string GetPersistentDeviceId()
+    {
+        if (!string.IsNullOrEmpty(_cachedDeviceId)) return _cachedDeviceId;
+        try
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Cryptography");
+            var guid = key?.GetValue("MachineGuid")?.ToString();
+            if (!string.IsNullOrEmpty(guid))
+            {
+                using var md5 = MD5.Create();
+                var hash1 = md5.ComputeHash(Encoding.UTF8.GetBytes(guid));
+                var hash2 = md5.ComputeHash(Encoding.UTF8.GetBytes(guid + "-device"));
+                var combined = hash1.Concat(hash2).Take(28).ToArray();
+                var parts = new List<string>();
+                for (int i = 0; i < combined.Length; i += 4)
+                {
+                    parts.Add(BitConverter.ToString(combined, i, 4).Replace("-", ""));
+                }
+                _cachedDeviceId = string.Join(".", parts);
+                return _cachedDeviceId;
+            }
+        }
+        catch { }
+        _cachedDeviceId = "A4D9E3A4.346613DD.9A5E8771.DB87980F.1DD97891.EE3411D0.6BD27B52";
+        return _cachedDeviceId;
+    }
+
+    public static string GetPersistentLocalUserId()
+    {
+        if (!string.IsNullOrEmpty(_cachedLocalUserId)) return _cachedLocalUserId;
+        try
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Cryptography");
+            var guid = key?.GetValue("MachineGuid")?.ToString();
+            if (!string.IsNullOrEmpty(guid))
+            {
+                using var md5 = MD5.Create();
+                var hash = md5.ComputeHash(Encoding.UTF8.GetBytes(guid + "-lu"));
+                _cachedLocalUserId = BitConverter.ToString(hash).Replace("-", "").ToUpperInvariant();
+                return _cachedLocalUserId;
+            }
+        }
+        catch { }
+        _cachedLocalUserId = "379D2D200DEFB6B8A3A218053471D202";
+        return _cachedLocalUserId;
+    }
+
+    private static AnisetteData? TryFetchFromAnisetteExe(string toolsDir)
+    {
+        var candidates = new[]
+        {
+            Path.Combine(toolsDir, "Anisette.exe"),
+            Path.Combine(toolsDir, "an", "Anisette.exe"),
+            @"C:\Program Files\i4Tools9\iCloudDll\Anisette.exe",
+            @"C:\Program Files (x86)\i4Tools9\iCloudDll\Anisette.exe"
+        };
+
+        foreach (var exe in candidates)
+        {
+            if (!File.Exists(exe)) continue;
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = exe,
+                    WorkingDirectory = Path.GetDirectoryName(exe)!,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                using var p = Process.Start(psi);
+                if (p == null) continue;
+                if (!p.WaitForExit(6000))
+                {
+                    try { p.Kill(); } catch { }
+                    continue;
+                }
+                var stdout = p.StandardOutput.ReadToEnd();
+                if (string.IsNullOrWhiteSpace(stdout) || !stdout.Contains("X-Apple-I-MD")) continue;
+
+                using var doc = JsonDocument.Parse(stdout);
+                var root = doc.RootElement;
+                return new AnisetteData
+                {
+                    MachineId = root.TryGetProperty("X-Apple-I-MD-M", out var mid) ? mid.GetString() ?? "" : "",
+                    OneTimePassword = root.TryGetProperty("X-Apple-I-MD", out var otp) ? otp.GetString() ?? "" : "",
+                    LocalUserId = root.TryGetProperty("X-Apple-I-MD-LU", out var lu) ? lu.GetString() ?? "" : GetPersistentLocalUserId(),
+                    RoutingInfo = root.TryGetProperty("X-Apple-I-MD-RINFO", out var rinfo) && long.TryParse(rinfo.GetString(), out var r) ? r : 17106176,
+                    DeviceUniqueId = root.TryGetProperty("X-Mme-Device-Id", out var did) ? did.GetString() ?? "" : GetPersistentDeviceId(),
+                    SerialNumber = root.TryGetProperty("X-Apple-I-SRL-NO", out var srl) ? srl.GetString() ?? "" : "C02LKHBBFD57",
+                    ClientInfo = root.TryGetProperty("X-MMe-Client-Info", out var ci) ? ci.GetString() ?? "" : AnisetteData.DefaultClientInfo,
+                    Locale = root.TryGetProperty("X-Apple-Locale", out var loc) ? loc.GetString() ?? "" : "en_GB",
+                    TimeZone = root.TryGetProperty("X-Apple-I-TimeZone", out var tz) ? tz.GetString() ?? "" : "GMT+0",
+                    ClientTime = root.TryGetProperty("X-Apple-I-Client-Time", out var ct) ? ct.GetString() ?? "" : DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+                };
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Anisette.exe failed: {ex.Message}");
+            }
+        }
+        return null;
+    }
 }

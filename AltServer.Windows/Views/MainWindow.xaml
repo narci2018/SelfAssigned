@@ -477,10 +477,19 @@
                                   ScrollViewer.VerticalScrollBarVisibility="Auto">
                             <ListView.View>
                                 <GridView>
-                                    <GridViewColumn Header="应用名称" Width="260" DisplayMemberBinding="{Binding Name}" />
-                                    <GridViewColumn Header="Bundle ID" Width="280" DisplayMemberBinding="{Binding BundleIdentifier}" />
-                                    <GridViewColumn Header="版本号" Width="120" DisplayMemberBinding="{Binding Version}" />
-                                    <GridViewColumn Header="构建号" Width="100" DisplayMemberBinding="{Binding Build}" />
+                                    <GridViewColumn Header="应用名称" Width="220" DisplayMemberBinding="{Binding Name}" />
+                                    <GridViewColumn Header="Bundle ID" Width="260" DisplayMemberBinding="{Binding BundleIdentifier}" />
+                                    <GridViewColumn Header="版本号" Width="100" DisplayMemberBinding="{Binding Version}" />
+                                    <GridViewColumn Header="构建号" Width="90" DisplayMemberBinding="{Binding Build}" />
+                                    <GridViewColumn Header="操作" Width="90">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <Button Content="卸载" Style="{StaticResource OutlineButton}"
+                                                        Padding="10,2" FontSize="11" Foreground="#EF4444" BorderBrush="#FCA5A5"
+                                                        Tag="{Binding BundleIdentifier}" Click="OnUninstallAppClick" />
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
                                 </GridView>
                             </ListView.View>
                         </ListView>

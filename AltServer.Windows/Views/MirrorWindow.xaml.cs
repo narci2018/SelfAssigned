@@ -97,7 +97,7 @@ public partial class MirrorWindow : Window
                     if (ex.Message.Contains("-27"))
                     {
                         AirPlayGuidePanel.Visibility = Visibility.Visible;
-                        StatusText.Text = "USB底层截屏受限(-27)，请点击窗口中「启动 AirPlay 投屏」或在手机开启开发者模式。";
+                        StatusText.Text = "USB底层截屏受限(-27): iOS 17/18 需开启「开发者模式」或使用控制中心「屏幕镜像」。";
                     }
                     else
                     {
@@ -152,40 +152,6 @@ public partial class MirrorWindow : Window
     private void OnTopmostChanged(object sender, RoutedEventArgs e)
     {
         Topmost = TopmostBox.IsChecked == true;
-    }
-
-    private void OnStartAirPlay(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            var candidates = new[]
-            {
-                @"C:\Program Files\i4AirPlayer\i4AirPlayer.exe",
-                @"C:\Program Files (x86)\i4AirPlayer\i4AirPlayer.exe",
-                @"C:\Program Files\i4Tools9\extrastools\i4AirPlayer3\i4AirPlayer_v6.2.10_Setup_x64_700016.exe"
-            };
-
-            var exe = candidates.FirstOrDefault(File.Exists);
-            if (exe != null)
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = exe,
-                    UseShellExecute = true,
-                    WorkingDirectory = Path.GetDirectoryName(exe)
-                });
-                StatusText.Text = "已启动投屏服务！请在 iPhone 控制中心点击「屏幕镜像」选择电脑连接。";
-            }
-            else
-            {
-                System.Windows.MessageBox.Show(this, "未检测到本地 AirPlay 投屏组件。请确认已安装投屏组件即可直接支持无线投屏。", "提示",
-                    System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
-            }
-        }
-        catch (Exception ex)
-        {
-            StatusText.Text = $"启动失败: {ex.Message}";
-        }
     }
 
     private async void OnRefreshOnce(object sender, RoutedEventArgs e)

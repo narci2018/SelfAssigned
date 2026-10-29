@@ -385,51 +385,36 @@ public class DeviceService
 
         var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-        // 检测输出格式：
-        // 旧版格式：  CFBundleIdentifier: com.xxx, CFBundleVersion: 1.0, ...
-        // 新版格式：  com.xxx, 1.0, AppName
-        bool isNewFormat = lines.Length > 0
-            && !lines[0].StartsWith("CFBundle", StringComparison.OrdinalIgnoreCase)
-            && !lines[0].StartsWith("Total:", StringComparison.OrdinalIgnoreCase)
-            && lines[0].Contains(',');
-
-        if (isNewFormat)
+        foreach (var rawLine in lines)
         {
-            // 新版 ideviceinstaller 输出：  bundleId, version, displayName
-            foreach (var line in lines)
-            {
-                // 跳过 "Total: N apps" 这类汇总行
-                if (line.StartsWith("Total:", StringComparison.OrdinalIgnoreCase)) continue;
+            var line = rawLine.Trim();
+            if (string.IsNullOrEmpty(line)) continue;
+            if (line.StartsWith("Total:", StringComparison.OrdinalIgnoreCase)) continue;
+            if (line.StartsWith("CFBundleIdentifier", StringComparison.OrdinalIgnoreCase) && line.Contains(',')) continue; // CSV 标题行
 
+            if (line.Contains(','))
+            {
+                // CSV 格式：bundleId, "version", "displayName"
                 var parts = line.Split(',', 3);
-                if (parts.Length < 1) continue;
+                var bundleId = parts[0].Trim().Trim('"', '\'');
+                if (string.IsNullOrEmpty(bundleId) || bundleId.Equals("CFBundleIdentifier", StringComparison.OrdinalIgnoreCase)) continue;
 
-                var bundleId = parts[0].Trim();
-                if (string.IsNullOrEmpty(bundleId)) continue;
+                var version = parts.Length > 1 ? parts[1].Trim().Trim('"', '\'') : string.Empty;
+                var name = parts.Length > 2 ? parts[2].Trim().Trim('"', '\'') : string.Empty;
+                if (string.IsNullOrEmpty(name))
+                    name = bundleId.Contains('.') ? bundleId.Split('.').Last() : bundleId;
 
-                var app = new InstalledApp { BundleIdentifier = bundleId };
-                if (parts.Length >= 2) app.Version = parts[1].Trim();
-                if (parts.Length >= 3)
+                apps.Add(new InstalledApp
                 {
-                    // 去掉版本号后括号：  "AppName - 1.0.0"  或  "AppName"
-                    var namePart = parts[2].Trim();
-                    // 某些版本格式: "Name - Version" 
-                    var dashIdx = namePart.LastIndexOf(" - ", StringComparison.Ordinal);
-                    app.Name = dashIdx > 0 ? namePart[..dashIdx].Trim() : namePart;
-                }
-                else
-                {
-                    app.Name = bundleId.Contains('.') ? bundleId.Split('.').Last() : bundleId;
-                }
-
-                apps.Add(app);
+                    BundleIdentifier = bundleId,
+                    Version = version,
+                    Build = version,
+                    Name = name
+                });
             }
-        }
-        else
-        {
-            // 旧版 ideviceinstaller 格式：每行 Key: Value
-            foreach (var line in lines)
+            else if (line.Contains(':'))
             {
+                // 旧版 ideviceinstaller 格式：Key: Value
                 if (line.StartsWith("CFBundleIdentifier:", StringComparison.OrdinalIgnoreCase))
                 {
                     var bundleId = line.Split(':', 2)[1].Trim();

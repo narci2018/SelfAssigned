@@ -57,7 +57,7 @@ public class AppleGsaClient : IDisposable
     public AnisetteData? Anisette => _anisette;
 
     private const string GS_ENDPOINT = "https://gsa.apple.com/grandslam/GsService2";
-    private const string GS_USER_AGENT = "akd/1.0 CFNetwork/978.0.7 Darwin/18.7.0";
+    private const string GS_USER_AGENT = "iCloud.exe (unknown version) CFNetwork/520.46";
     private const string PLIST_PROLOG = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n";
     private const string DefaultClientInfo =
         "<PC> <Windows;10.0.26100> <com.apple.AuthKitWin/1 (com.apple.iTunes/12.13.7)>";
@@ -440,8 +440,6 @@ public class AppleGsaClient : IDisposable
         const string app = "com.apple.gs.xcode.auth";
         try
         {
-            var checksum = AppleSrp.MakeChecksum(_sessionKey, _adsId, app);
-            LogService.Info($"[GSA] apptokens checksum: {BitConverter.ToString(checksum)}");
             LogService.Info($"[GSA] apptokens adsId: {_adsId}");
             LogService.Info($"[GSA] apptokens app: {app}");
             LogService.Info($"[GSA] apptokens gsIdmsToken: {(_gsIdmsToken.Length > 24 ? _gsIdmsToken[..24] + "..." : _gsIdmsToken)}");
@@ -449,7 +447,6 @@ public class AppleGsaClient : IDisposable
             {
                 ["app"] = new object[] { app },
                 ["c"] = _sessionCookie,
-                ["checksum"] = checksum,
                 ["o"] = "apptokens",
                 ["t"] = _gsIdmsToken,
                 ["u"] = _adsId
@@ -505,10 +502,35 @@ public class AppleGsaClient : IDisposable
             }
 
             var tokensText = Encoding.UTF8.GetString(plain);
-            var token = ExtractXml(tokensText, "token");
+            LogService.Info($"[GSA] apptokens 解密明文长度: {plain.Length} 字节");
+
+            // 提取 token: 支持 XML Plist / 字典键 / 正则
+            string? token = ExtractXml(tokensText, "token");
+            if (string.IsNullOrEmpty(token))
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(tokensText, @"<key>token</key>\s*<string>([^<]+)</string>");
+                if (match.Success)
+                    token = match.Groups[1].Value.Trim();
+            }
+
+            if (string.IsNullOrEmpty(token))
+            {
+                var parsed = ParseApplePlist(tokensText);
+                if (parsed != null && parsed.TryGetValue("token", out var tVal))
+                    token = tVal;
+            }
+
+            if (string.IsNullOrEmpty(token))
+            {
+                // 正则捕获 Apple GS Token 特征的 Base64 串
+                var m = System.Text.RegularExpressions.Regex.Match(tokensText, @"([A-Za-z0-9+/=]{80,})");
+                if (m.Success)
+                    token = m.Groups[1].Value.Trim();
+            }
+
             if (!string.IsNullOrEmpty(token))
             {
-                LogService.Info("[GSA] apptokens 获取成功");
+                LogService.Info($"[GSA] apptokens 获取成功: tokenLen={token.Length}");
                 return token;
             }
 
@@ -958,8 +980,6 @@ public class AppleGsaClient : IDisposable
         };
         request.Headers.TryAddWithoutValidation("User-Agent", GS_USER_AGENT);
         request.Headers.TryAddWithoutValidation("Accept", "*/*");
-        request.Headers.TryAddWithoutValidation("X-MMe-Client-Info", DefaultClientInfo);
-        request.Headers.TryAddWithoutValidation("X-Apple-Client-App-Name", "akd");
         request.Headers.TryAddWithoutValidation("Connection", "close");
 
         // GrandSlam validates that the anisette values are present as HTTP headers too

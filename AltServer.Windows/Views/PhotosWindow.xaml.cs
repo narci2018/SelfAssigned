@@ -1,8 +1,12 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using AltServer.Windows.Models;
 using AltServer.Windows.Services;
+using MessageBox = System.Windows.MessageBox;
 
 namespace AltServer.Windows.Views;
 
@@ -15,6 +19,8 @@ public partial class PhotosWindow : Window
     private readonly PhotosService _photos = new();
     private List<PhotosService.AlbumCategory> _albums = new();
     private List<PhotosService.MediaFile> _currentFiles = new();
+    private List<DisplayItem> _displayItems = new();
+    private CancellationTokenSource? _thumbCts;
     private bool _busy;
 
     public PhotosWindow(Device device)
@@ -23,16 +29,39 @@ public partial class PhotosWindow : Window
         _device = device;
         DeviceText.Text = $"{device.DisplayName} · {device.Udid}";
         Loaded += async (_, _) => await LoadAlbumsAsync();
+        Closed += (_, _) => _thumbCts?.Cancel();
     }
 
-    public sealed class DisplayItem
+    public sealed class DisplayItem : System.ComponentModel.INotifyPropertyChanged
     {
         public string Name { get; init; } = "";
         public string SizeText { get; init; } = "";
         public string ModifiedText { get; init; } = "";
         public bool IsVideo { get; init; }
         public string IsVideoText => IsVideo ? "视频" : "图片";
+        public string PlaceholderIcon => IsVideo ? "🎬" : "🖼";
+        public Visibility VideoBadgeVisibility => IsVideo ? Visibility.Visible : Visibility.Collapsed;
         public PhotosService.MediaFile File { get; init; } = new();
+
+        private ImageSource? _thumbnail;
+        public ImageSource? Thumbnail
+        {
+            get => _thumbnail;
+            set
+            {
+                if (_thumbnail != value)
+                {
+                    _thumbnail = value;
+                    OnPropertyChanged(nameof(Thumbnail));
+                    OnPropertyChanged(nameof(ThumbnailVisibility));
+                }
+            }
+        }
+
+        public Visibility ThumbnailVisibility => _thumbnail == null ? Visibility.Visible : Visibility.Collapsed;
+
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+        private void OnPropertyChanged(string prop) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(prop));
     }
 
     private async Task LoadAlbumsAsync()
@@ -61,6 +90,7 @@ public partial class PhotosWindow : Window
             else
             {
                 FilesList.ItemsSource = null;
+                ThumbnailList.ItemsSource = null;
                 StatusText.Text = "设备相册中暂无照片或视频。";
             }
 
@@ -86,7 +116,7 @@ public partial class PhotosWindow : Window
         CurrentAlbumTitle.Text = album.Name;
         _currentFiles = album.Files;
 
-        FilesList.ItemsSource = album.Files.Select(f => new DisplayItem
+        _displayItems = album.Files.Select(f => new DisplayItem
         {
             Name = f.Name,
             SizeText = f.SizeText,
@@ -95,7 +125,64 @@ public partial class PhotosWindow : Window
             File = f
         }).ToList();
 
-        StatusText.Text = $"{album.Name}: 共 {album.Files.Count} 个项目。按住 Ctrl/Shift 可在列表中多选。";
+        ThumbnailList.ItemsSource = _displayItems;
+        FilesList.ItemsSource = _displayItems;
+
+        StatusText.Text = $"{album.Name}: 共 {album.Files.Count} 个项目。双击照片可放大预览；按住 Ctrl/Shift 可多选。";
+
+        // 启动后台异步加载缩略图
+        StartThumbnailLoader(_displayItems);
+    }
+
+    private void StartThumbnailLoader(List<DisplayItem> items)
+    {
+        _thumbCts?.Cancel();
+        _thumbCts = new CancellationTokenSource();
+        var ct = _thumbCts.Token;
+
+        _ = Task.Run(async () =>
+        {
+            foreach (var item in items)
+            {
+                if (ct.IsCancellationRequested) break;
+                if (item.Thumbnail != null) continue;
+
+                try
+                {
+                    if (!item.IsVideo)
+                    {
+                        var bytes = _photos.ReadFileData(_device.Udid, item.File.AfcPath);
+                        if (bytes != null && bytes.Length > 0)
+                        {
+                            var bitmap = new BitmapImage();
+                            using (var ms = new MemoryStream(bytes))
+                            {
+                                bitmap.BeginInit();
+                                bitmap.DecodePixelWidth = 160;
+                                bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                                bitmap.StreamSource = ms;
+                                bitmap.EndInit();
+                            }
+                            bitmap.Freeze();
+
+                            Dispatcher.Invoke(() => item.Thumbnail = bitmap);
+                        }
+                    }
+                }
+                catch { }
+
+                await Task.Delay(25, ct);
+            }
+        }, ct);
+    }
+
+    private void OnViewModeChanged(object sender, RoutedEventArgs e)
+    {
+        if (ThumbnailScroller == null || FilesList == null) return;
+
+        bool isThumb = ThumbnailModeRadio.IsChecked == true;
+        ThumbnailScroller.Visibility = isThumb ? Visibility.Visible : Visibility.Collapsed;
+        FilesList.Visibility = isThumb ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private void SetUiEnabled(bool enabled)
@@ -103,17 +190,118 @@ public partial class PhotosWindow : Window
         ExportSelectedBtn.IsEnabled = enabled;
         ExportAllBtn.IsEnabled = enabled;
         ImportBtn.IsEnabled = enabled;
+        DeleteSelectedBtn.IsEnabled = enabled;
     }
 
     private async void OnRefresh(object sender, RoutedEventArgs e) => await LoadAlbumsAsync();
 
     private void OnSelectAll(object sender, RoutedEventArgs e)
     {
-        FilesList.SelectAll();
+        if (ThumbnailModeRadio.IsChecked == true)
+            ThumbnailList.SelectAll();
+        else
+            FilesList.SelectAll();
     }
 
     private List<PhotosService.MediaFile> GetSelectedFiles()
-        => FilesList.SelectedItems.Cast<DisplayItem>().Select(d => d.File).ToList();
+    {
+        if (ThumbnailModeRadio.IsChecked == true)
+        {
+            return ThumbnailList.SelectedItems.Cast<DisplayItem>().Select(d => d.File).ToList();
+        }
+        return FilesList.SelectedItems.Cast<DisplayItem>().Select(d => d.File).ToList();
+    }
+
+    private void OnItemDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        OpenEnlargedViewer();
+    }
+
+    private void OnViewEnlarged(object sender, RoutedEventArgs e)
+    {
+        OpenEnlargedViewer();
+    }
+
+    private void OpenEnlargedViewer()
+    {
+        var selectedItem = (ThumbnailModeRadio.IsChecked == true
+            ? ThumbnailList.SelectedItem
+            : FilesList.SelectedItem) as DisplayItem;
+
+        if (selectedItem == null && _displayItems.Count > 0)
+            selectedItem = _displayItems[0];
+
+        if (selectedItem == null) return;
+
+        var index = _currentFiles.IndexOf(selectedItem.File);
+        if (index < 0) index = 0;
+
+        var viewer = new PhotoViewerWindow(_device.Udid, _photos, _currentFiles, index)
+        {
+            Owner = this
+        };
+
+        viewer.FileDeleted += deletedFile =>
+        {
+            var match = _displayItems.FirstOrDefault(d => d.File.AfcPath == deletedFile.AfcPath);
+            if (match != null)
+            {
+                _displayItems.Remove(match);
+                ThumbnailList.ItemsSource = null;
+                ThumbnailList.ItemsSource = _displayItems;
+                FilesList.ItemsSource = null;
+                FilesList.ItemsSource = _displayItems;
+                StatusText.Text = $"已删除 {deletedFile.Name}，当前剩余 {_displayItems.Count} 个文件。";
+            }
+        };
+
+        viewer.ShowDialog();
+    }
+
+    private async void OnDeleteSelected(object sender, RoutedEventArgs e)
+    {
+        var files = GetSelectedFiles();
+        if (files.Count == 0)
+        {
+            MessageBox.Show(this, "请先在列表中选中要删除的照片或视频。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var confirm = MessageBox.Show(this,
+            $"确定要从设备中彻底删除选中的 {files.Count} 个照片/视频吗？\n\n此操作不可逆！",
+            "删除确认", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+
+        if (confirm != MessageBoxResult.Yes) return;
+
+        _busy = true;
+        SetUiEnabled(false);
+        ProgressBar.Value = 0;
+
+        var progress = new Progress<PhotosService.ProgressInfo>(p =>
+        {
+            ProgressBar.Value = (double)p.Current / p.Total * 100;
+            StatusText.Text = $"正在删除 ({p.Current}/{p.Total}): {p.CurrentFile}";
+        });
+
+        try
+        {
+            await Task.Run(() => _photos.DeleteFiles(_device.Udid, files, progress));
+            StatusText.Text = $"成功删除 {files.Count} 个文件！";
+            MessageBox.Show(this, $"成功从设备删除 {files.Count} 个文件！", "删除完成", MessageBoxButton.OK, MessageBoxImage.Information);
+            await LoadAlbumsAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"删除中断: {ex.Message}";
+            MessageBox.Show(this, $"删除失败: {ex.Message}", "删除错误", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            _busy = false;
+            SetUiEnabled(true);
+            ProgressBar.Value = 0;
+        }
+    }
 
     private async void OnExportSelected(object sender, RoutedEventArgs e)
     {

@@ -58,6 +58,32 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <Style x:Key="DangerButton" TargetType="Button">
+            <Setter Property="Background" Value="#DC2626" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Padding" Value="12,6" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border" Background="{TemplateBinding Background}"
+                                CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="#B91C1C" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="border" Property="Background" Value="#FCA5A5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <Grid>
@@ -125,38 +151,112 @@
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
-                    <Button Content="刷新" Click="OnRefresh" Style="{StaticResource OutlineButton}" Margin="0,0,8,0" />
+                    <!-- 视图切换 -->
+                    <Border Background="#E2E8F0" CornerRadius="6" Padding="2" Margin="0,0,10,0">
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton x:Name="ThumbnailModeRadio" Content="🖼 缩略图" IsChecked="True"
+                                         GroupName="ViewMode" Checked="OnViewModeChanged"
+                                         Padding="8,4" Cursor="Hand" />
+                            <RadioButton x:Name="ListModeRadio" Content="📋 列表"
+                                         GroupName="ViewMode" Checked="OnViewModeChanged"
+                                         Padding="8,4" Cursor="Hand" />
+                        </StackPanel>
+                    </Border>
+
+                    <Button Content="🔍 放大查看" Click="OnViewEnlarged" Style="{StaticResource OutlineButton}" Margin="0,0,8,0" />
                     <Button Content="全选" Click="OnSelectAll" Style="{StaticResource OutlineButton}" Margin="0,0,8,0" />
                     <Button Content="⬇ 导出选中" Click="OnExportSelected" Margin="0,0,8,0"
                             Style="{StaticResource PrimaryButton}" x:Name="ExportSelectedBtn" />
                     <Button Content="⬇ 导出全部" Click="OnExportAll" Margin="0,0,8,0"
                             Style="{StaticResource PrimaryButton}" x:Name="ExportAllBtn" />
-                    <Button Content="⬆ 从电脑导入" Click="OnImport" Margin="0,0,0,0"
+                    <Button Content="⬆ 导入照片" Click="OnImport" Margin="0,0,8,0"
                             Style="{StaticResource PrimaryButton}" x:Name="ImportBtn" Background="#16A34A" />
+                    <Button Content="🗑 删除选中" Click="OnDeleteSelected" Margin="0,0,0,0"
+                            Style="{StaticResource DangerButton}" x:Name="DeleteSelectedBtn" />
                 </StackPanel>
             </DockPanel>
 
-            <!-- 媒体文件列表 -->
+            <!-- 媒体文件展示区 (双模式：缩略图网格 / 详细列表) -->
             <Border Grid.Row="1" Background="White" CornerRadius="8" BorderBrush="#E2E8F0" BorderThickness="1" Padding="8">
-                <ListView x:Name="FilesList" SelectionMode="Extended" ScrollViewer.VerticalScrollBarVisibility="Auto">
-                    <ListView.View>
-                        <GridView>
-                            <GridViewColumn Header="文件名" Width="360" DisplayMemberBinding="{Binding Name}" />
-                            <GridViewColumn Header="类型" Width="70">
-                                <GridViewColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <Border CornerRadius="4" Padding="4,2" HorizontalAlignment="Left"
-                                                Background="{Binding IsVideo, Converter={StaticResource BoolToVideoBrush}}">
-                                            <TextBlock Text="{Binding IsVideoText}" FontSize="11" Foreground="White" />
-                                        </Border>
-                                    </DataTemplate>
-                                </GridViewColumn.CellTemplate>
-                            </GridViewColumn>
-                            <GridViewColumn Header="大小" Width="100" DisplayMemberBinding="{Binding SizeText}" />
-                            <GridViewColumn Header="修改/创建时间" Width="180" DisplayMemberBinding="{Binding ModifiedText}" />
-                        </GridView>
-                    </ListView.View>
-                </ListView>
+                <Grid>
+                    <!-- 1. 缩略图网格视图 -->
+                    <ScrollViewer x:Name="ThumbnailScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <ListBox x:Name="ThumbnailList" SelectionMode="Extended" BorderThickness="0" Background="Transparent"
+                                 MouseDoubleClick="OnItemDoubleClick" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                            <ListBox.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel ItemWidth="140" ItemHeight="170" Orientation="Horizontal" />
+                                </ItemsPanelTemplate>
+                            </ListBox.ItemsPanel>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Margin="5" Background="#F8FAFC" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="6"
+                                            Cursor="Hand" ToolTip="{Binding Name}">
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="120" />
+                                                <RowDefinition Height="36" />
+                                            </Grid.RowDefinitions>
+
+                                            <!-- 缩略图图像 -->
+                                            <Border Grid.Row="0" CornerRadius="6,6,0,0" ClipToBounds="True" Background="#0F172A">
+                                                <Grid>
+                                                    <Image Source="{Binding Thumbnail}" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                    <TextBlock Text="{Binding PlaceholderIcon}" FontSize="28" Foreground="#64748B"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                               Visibility="{Binding ThumbnailVisibility}" />
+                                                    <!-- 视频角标 -->
+                                                    <Border Background="#CC000000" CornerRadius="4" Padding="4,1" Margin="4"
+                                                            HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                                            Visibility="{Binding VideoBadgeVisibility}">
+                                                        <TextBlock Text="▶ 视频" FontSize="10" Foreground="White" />
+                                                    </Border>
+                                                </Grid>
+                                            </Border>
+
+                                            <!-- 文件名与大小 -->
+                                            <StackPanel Grid.Row="1" VerticalAlignment="Center" Margin="6,2">
+                                                <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="Medium" Foreground="#0F172A"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Text="{Binding SizeText}" FontSize="10" Foreground="#64748B" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="Padding" Value="0" />
+                                    <Setter Property="Margin" Value="2" />
+                                    <Setter Property="Background" Value="Transparent" />
+                                    <Setter Property="BorderThickness" Value="0" />
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                        </ListBox>
+                    </ScrollViewer>
+
+                    <!-- 2. 详细列表视图 -->
+                    <ListView x:Name="FilesList" SelectionMode="Extended" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                              MouseDoubleClick="OnItemDoubleClick" Visibility="Collapsed">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="文件名" Width="320" DisplayMemberBinding="{Binding Name}" />
+                                <GridViewColumn Header="类型" Width="70">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <Border CornerRadius="4" Padding="4,2" HorizontalAlignment="Left"
+                                                    Background="{Binding IsVideo, Converter={StaticResource BoolToVideoBrush}}">
+                                                <TextBlock Text="{Binding IsVideoText}" FontSize="11" Foreground="White" />
+                                            </Border>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <GridViewColumn Header="大小" Width="100" DisplayMemberBinding="{Binding SizeText}" />
+                                <GridViewColumn Header="修改/创建时间" Width="180" DisplayMemberBinding="{Binding ModifiedText}" />
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+                </Grid>
             </Border>
 
             <!-- 进度 -->

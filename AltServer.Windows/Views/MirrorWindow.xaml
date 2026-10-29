@@ -17,8 +17,8 @@
                         <CheckBox x:Name="TopmostBox" Content="窗口置顶" VerticalAlignment="Center"
                                   Margin="0,0,12,0" Checked="OnTopmostChanged" Unchecked="OnTopmostChanged" />
                         <Button Content="📸 保存截图" Click="OnSaveScreenshot" Padding="10,6" Margin="0,0,8,0" />
-                        <Button Content="📡 启动爱思投屏(AirPlayer)" Click="OnLaunchAirPlayer" Padding="10,6" Margin="0,0,8,0" />
-                        <Button Content="刷新一次" Click="OnRefreshOnce" Padding="10,6" />
+                        <Button Content="📋 复制截图" Click="OnCopyScreenshot" Padding="10,6" Margin="0,0,8,0" />
+                        <Button Content="🔄 刷新" Click="OnRefreshOnce" Padding="10,6" />
                     </StackPanel>
                     <TextBlock x:Name="StatusText" Text="连接中..." VerticalAlignment="Center"
                                FontSize="12" Foreground="#475569" TextTrimming="CharacterEllipsis" />

@@ -458,4 +458,45 @@ public class PhotosService
             if (!File.Exists(candidate)) return candidate;
         }
     }
+
+    /// <summary>从设备读取单个媒体文件的全部字节（用于缩略图生成与高清预览）</summary>
+    public byte[]? ReadFileData(string udid, string afcPath)
+    {
+        try
+        {
+            using var session = new DeviceNative.IdeviceSession(udid);
+            using var afc = session.CreateAfcClient();
+            return afc.ReadFile(afcPath);
+        }
+        catch (Exception ex)
+        {
+            LogService.Warning($"[照片] 读取文件失败 {afcPath}: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>从设备中彻底删除指定的照片/视频列表</summary>
+    public void DeleteFiles(string udid, IEnumerable<MediaFile> files, IProgress<ProgressInfo>? progress = null, CancellationToken ct = default)
+    {
+        using var session = new DeviceNative.IdeviceSession(udid);
+        using var afc = session.CreateAfcClient();
+
+        var list = files.ToList();
+        for (var i = 0; i < list.Count; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var file = list[i];
+            progress?.Report(new ProgressInfo { Current = i + 1, Total = list.Count, CurrentFile = file.Name });
+            try
+            {
+                afc.Remove(file.AfcPath);
+                LogService.Info($"[照片] 已成功删除设备文件: {file.AfcPath}");
+            }
+            catch (Exception ex)
+            {
+                LogService.Warning($"[照片] 删除文件 {file.AfcPath} 失败: {ex.Message}");
+                throw;
+            }
+        }
+    }
 }

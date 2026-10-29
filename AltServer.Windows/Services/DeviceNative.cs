@@ -95,6 +95,21 @@ public static class DeviceNative
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     private static extern int afc_dictionary_free(IntPtr dictionary);
 
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int diagnostics_relay_client_start_service(IntPtr device, out IntPtr client, string label);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int diagnostics_relay_client_free(IntPtr client);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int diagnostics_relay_query_ioregistry_entry(IntPtr client, string entryName, string planeName, out IntPtr result);
+
+    [DllImport("plist.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern void plist_to_xml(IntPtr plist, out IntPtr xml, out uint length);
+
+    [DllImport("plist.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern void plist_free(IntPtr plist);
+
     // libimobiledevice 使用 MSVC 动态 UCRT 分配堆内存，截图数据缓冲需要用同一 CRT 释放
     [DllImport("ucrtbase.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern void free(IntPtr ptr);
@@ -464,5 +479,46 @@ public static class DeviceNative
                 if (_client != IntPtr.Zero) { screenshotr_client_free(_client); _client = IntPtr.Zero; }
             }
         }
+    }
+
+    /// <summary>通过 diagnostics_relay 服务查询底层 IORegistry（获取精准电池健康、充电循环次数等原生硬件数据）</summary>
+    public static string? QueryDiagnosticsIORegistry(string udid, string entryName = "AppleSmartBattery", string planeName = "")
+    {
+        EnsureToolsDirInSearchPath(AppDomain.CurrentDomain.BaseDirectory);
+        int rc = idevice_new(out var device, udid);
+        if (rc != 0 || device == IntPtr.Zero) return null;
+        try
+        {
+            rc = diagnostics_relay_client_start_service(device, out var diag, "AltServer");
+            if (rc != 0 || diag == IntPtr.Zero) return null;
+            try
+            {
+                rc = diagnostics_relay_query_ioregistry_entry(diag, entryName, planeName, out var plist);
+                if (rc != 0 || plist == IntPtr.Zero) return null;
+                try
+                {
+                    plist_to_xml(plist, out var xmlPtr, out var length);
+                    if (xmlPtr != IntPtr.Zero && length > 0)
+                    {
+                        var xmlStr = Marshal.PtrToStringUTF8(xmlPtr);
+                        return xmlStr;
+                    }
+                }
+                finally
+                {
+                    plist_free(plist);
+                }
+            }
+            finally
+            {
+                diagnostics_relay_client_free(diag);
+            }
+        }
+        catch { }
+        finally
+        {
+            idevice_free(device);
+        }
+        return null;
     }
 }

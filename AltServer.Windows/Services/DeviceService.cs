@@ -512,10 +512,18 @@ public class DeviceService
             if (dict.TryGetValue("ProductVersion", out var pv)) info.ProductVersion = pv;
             if (dict.TryGetValue("BuildVersion", out var bv)) info.BuildVersion = bv;
             if (dict.TryGetValue("ModelNumber", out var mn)) info.ModelNumber = mn;
-            if (dict.TryGetValue("SerialNumber", out var sn)) info.SerialNumber = sn;
+            if (dict.TryGetValue("SerialNumber", out var sn))
+            {
+                info.SerialNumber = sn;
+                info.ProductionDate = DecodeAppleSerialNumber(sn);
+            }
             if (dict.TryGetValue("CPUArchitecture", out var cpu)) info.CpuArchitecture = cpu;
             if (dict.TryGetValue("HardwareModel", out var hm)) info.HardwareModel = hm;
-            if (dict.TryGetValue("RegionInfo", out var ri)) info.RegionInfo = ri;
+            if (dict.TryGetValue("RegionInfo", out var ri))
+            {
+                info.RegionInfo = ri;
+                info.SalesRegion = MapSalesRegion(ri);
+            }
             if (dict.TryGetValue("RegulatoryModelNumber", out var rmn)) info.RegulatoryModelNumber = rmn;
             if (dict.TryGetValue("PhoneNumber", out var pn)) info.PhoneNumber = pn;
             if (dict.TryGetValue("BasebandVersion", out var bb)) info.BasebandVersion = bb;
@@ -523,8 +531,15 @@ public class DeviceService
             if (dict.TryGetValue("WiFiAddress", out var wf)) info.WiFiAddress = wf;
             if (dict.TryGetValue("EthernetAddress", out var ea)) info.EthernetAddress = ea;
             if (dict.TryGetValue("InternationalMobileEquipmentIdentity", out var imei)) info.InternationalMobileEquipmentIdentity = imei;
-            if (dict.TryGetValue("ActivationState", out var act)) info.ActivationState = act;
+            if (dict.TryGetValue("InternationalMobileEquipmentIdentity2", out var imei2)) info.Imei2 = imei2;
+            if (dict.TryGetValue("ActivationState", out var act)) info.ActivationState = act.Equals("Activated", StringComparison.OrdinalIgnoreCase) ? "已激活" : act;
             if (dict.TryGetValue("CarrierBundleInfoArray", out var car)) info.CarrierName = car;
+
+            // 激活锁与 iCloud 状态
+            if (rawAll.Contains("fm-activation-locked: WUVT") || rawAll.Contains("fm-activation-locked: YES"))
+                info.ActivationLockStatus = "已开启";
+            if (rawAll.Contains("fm-account-masked"))
+                info.ICloudStatus = "已开启";
 
             // 映射常见友好型号名（如 iPhone13,2 -> iPhone 12）
             info.ModelName = MapFriendlyModelName(info.ProductType);
@@ -534,20 +549,38 @@ public class DeviceService
             LogService.Warning($"[设备详情] 读取基础信息异常: {ex.Message}");
         }
 
-        // 读取电池详情
+        // 读取底层真实电池详情（通过 diagnostics_relay 读取原生 IORegistry AppleSmartBattery）
+        try
+        {
+            var diagXml = DeviceNative.QueryDiagnosticsIORegistry(udid, "AppleSmartBattery", "");
+            if (!string.IsNullOrEmpty(diagXml))
+            {
+                ParseBatteryFromDiagnostics(diagXml, info);
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Warning($"[设备详情] 读取 diagnostics 电池异常: {ex.Message}");
+        }
+
+        // 补充读取标准电池通道（获取充电状态和当前电量兜底）
         try
         {
             var rawBattery = RunToolNoThrow("ideviceinfo", $"-u {udid} -q com.apple.mobile.battery", timeoutMs: 8_000);
             var bDict = ParseKeyValueOutput(rawBattery);
-            if (bDict.TryGetValue("CurrentCapacity", out var cc) && int.TryParse(cc, out var cci)) info.BatteryCurrentCapacity = cci;
-            if (bDict.TryGetValue("IsCharging", out var ic)) info.BatteryIsCharging = ic.Equals("true", StringComparison.OrdinalIgnoreCase);
-            if (bDict.TryGetValue("CycleCount", out var cyc) && int.TryParse(cyc, out var cyci)) info.BatteryCycleCount = cyci;
-            if (bDict.TryGetValue("DesignCapacity", out var dc) && int.TryParse(dc, out var dci)) info.BatteryDesignCapacity = dci;
-            if (bDict.TryGetValue("FullAvailableCapacity", out var fac) && int.TryParse(fac, out var faci)) info.BatteryFullAvailableCapacity = faci;
+            if (bDict.TryGetValue("BatteryCurrentCapacity", out var bcc) && int.TryParse(bcc, out var bcci))
+                info.BatteryCurrentCapacity = bcci;
+            else if (bDict.TryGetValue("CurrentCapacity", out var cc) && int.TryParse(cc, out var cci))
+                info.BatteryCurrentCapacity = cci;
+
+            if (bDict.TryGetValue("BatteryIsCharging", out var bic))
+                info.BatteryIsCharging = bic.Equals("true", StringComparison.OrdinalIgnoreCase);
+            else if (bDict.TryGetValue("IsCharging", out var ic))
+                info.BatteryIsCharging = ic.Equals("true", StringComparison.OrdinalIgnoreCase);
         }
         catch { }
 
-        // 读取存储详情
+        // 读取存储详情 (com.apple.disk_usage)
         try
         {
             var rawDisk = RunToolNoThrow("ideviceinfo", $"-u {udid} -q com.apple.disk_usage", timeoutMs: 8_000);
@@ -555,6 +588,7 @@ public class DeviceService
             if (dDict.TryGetValue("TotalDiskCapacity", out var tdc) && long.TryParse(tdc, out var tdcl)) info.TotalDiskCapacity = tdcl;
             if (dDict.TryGetValue("TotalDataCapacity", out var tdat) && long.TryParse(tdat, out var tdatl)) info.TotalDataCapacity = tdatl;
             if (dDict.TryGetValue("TotalDataAvailable", out var tda) && long.TryParse(tda, out var tdal)) info.TotalDataAvailable = tdal;
+            if (dDict.TryGetValue("AmountDataAvailable", out var ada) && long.TryParse(ada, out var adal)) info.AmountDataAvailable = adal;
             if (dDict.TryGetValue("AmountDataReserved", out var adr) && long.TryParse(adr, out var adrl)) info.AmountDataReserved = adrl;
         }
         catch { }
@@ -619,6 +653,131 @@ public class DeviceService
             "iPad14,1" or "iPad14,2" => "iPad mini 6",
             _ => productType
         };
+    }
+
+    private static string DecodeAppleSerialNumber(string sn)
+    {
+        if (string.IsNullOrWhiteSpace(sn)) return string.Empty;
+        sn = sn.Trim().ToUpperInvariant();
+
+        // 12位编码（经典年代与周数规则）
+        if (sn.Length == 12)
+        {
+            char yearChar = sn[3];
+            char weekChar = sn[4];
+
+            var yearMap = new Dictionary<char, (int year, int half)>
+            {
+                ['C'] = (2020, 1), ['D'] = (2020, 2),
+                ['F'] = (2021, 1), ['G'] = (2021, 2),
+                ['H'] = (2022, 1), ['J'] = (2022, 2),
+                ['K'] = (2023, 1), ['L'] = (2023, 2),
+                ['M'] = (2024, 1), ['N'] = (2024, 2),
+                ['P'] = (2025, 1), ['Q'] = (2025, 2),
+                ['R'] = (2026, 1), ['S'] = (2026, 2),
+                ['T'] = (2017, 1), ['V'] = (2017, 2),
+                ['W'] = (2018, 1), ['X'] = (2018, 2),
+                ['Y'] = (2019, 1), ['Z'] = (2019, 2),
+            };
+
+            int halfWeek = -1;
+            if (weekChar >= '1' && weekChar <= '9')
+            {
+                halfWeek = weekChar - '0';
+            }
+            else
+            {
+                var letters = new[] { 'C', 'D', 'F', 'G', 'H', 'J', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'T', 'V', 'W', 'X', 'Y' };
+                int idx = Array.IndexOf(letters, weekChar);
+                if (idx >= 0) halfWeek = 10 + idx;
+            }
+
+            if (yearMap.TryGetValue(yearChar, out var yInfo) && halfWeek > 0)
+            {
+                int fullWeek = yInfo.half == 1 ? halfWeek : (halfWeek + 26);
+                var jan1 = new DateTime(yInfo.year, 1, 1);
+                int daysOffset = (int)DayOfWeek.Monday - (int)jan1.DayOfWeek;
+                if (daysOffset > 0) daysOffset -= 7;
+                var firstMonday = jan1.AddDays(daysOffset);
+                var estDate = firstMonday.AddDays((fullWeek - 1) * 7 + 6);
+                return $"{estDate:yyyy年MM月dd日}(第{fullWeek}周)";
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static string MapSalesRegion(string region)
+    {
+        if (string.IsNullOrWhiteSpace(region)) return "中国 (国行)";
+        var r = region.ToUpperInvariant().Trim();
+        if (r.Contains("CH")) return "中国 (国行)";
+        if (r.Contains("LL")) return "美国 (美版)";
+        if (r.Contains("ZP")) return "中国香港 (港版)";
+        if (r.Contains("ZA")) return "中国香港/澳门 (双卡版)";
+        if (r.Contains("TA")) return "中国台湾 (台版)";
+        if (r.Contains("J")) return "日本 (日版)";
+        if (r.Contains("KH")) return "韩国 (韩版)";
+        if (r.Contains("B")) return "英国 (英版)";
+        if (r.Contains("DN")) return "德国 (德版)";
+        if (r.Contains("FB")) return "法国 (法版)";
+        if (r.Contains("TY")) return "意大利 (意版)";
+        if (r.Contains("X")) return "澳大利亚 (澳版)";
+        if (r.Contains("HN")) return "印度 (印版)";
+        if (r.Contains("MY")) return "马来西亚 (马版)";
+        if (r.Contains("C")) return "加拿大 (加版)";
+        return region;
+    }
+
+    private static void ParseBatteryFromDiagnostics(string xml, DeviceDetailInfo info)
+    {
+        try
+        {
+            var doc = System.Xml.Linq.XDocument.Parse(xml);
+            var keys = doc.Descendants("key").ToList();
+            foreach (var keyElem in keys)
+            {
+                var key = keyElem.Value;
+                var nextElem = keyElem.ElementsAfterSelf().FirstOrDefault();
+                if (nextElem == null) continue;
+
+                if (key.Equals("CycleCount", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (int.TryParse(nextElem.Value, out var val)) info.BatteryCycleCount = val;
+                }
+                else if (key.Equals("DesignCapacity", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (int.TryParse(nextElem.Value, out var val)) info.BatteryDesignCapacity = val;
+                }
+                else if (key.Equals("NominalChargeCapacity", StringComparison.OrdinalIgnoreCase) || 
+                         key.Equals("FullAvailableCapacity", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (int.TryParse(nextElem.Value, out var val)) info.BatteryFullAvailableCapacity = val;
+                }
+                else if (key.Equals("CurrentCapacity", StringComparison.OrdinalIgnoreCase) ||
+                         key.Equals("BatteryCurrentCapacity", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (int.TryParse(nextElem.Value, out var val)) info.BatteryCurrentCapacity = val;
+                }
+                else if (key.Equals("IsCharging", StringComparison.OrdinalIgnoreCase))
+                {
+                    info.BatteryIsCharging = nextElem.Name.LocalName.Equals("true", StringComparison.OrdinalIgnoreCase);
+                }
+                else if (key.Equals("MaximumCapacityPercent", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (int.TryParse(nextElem.Value, out var val)) info.BatteryHealthPercent = val;
+                }
+            }
+
+            if (info.BatteryHealthPercent <= 0 && info.BatteryDesignCapacity > 0 && info.BatteryFullAvailableCapacity > 0)
+            {
+                info.BatteryHealthPercent = (int)Math.Round((double)info.BatteryFullAvailableCapacity / info.BatteryDesignCapacity * 100);
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Warning($"[设备详情] 解析电池 XML 失败: {ex.Message}");
+        }
     }
 
     private string RunTool(string toolName, string arguments, int timeoutMs)

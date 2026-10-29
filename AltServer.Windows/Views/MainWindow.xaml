@@ -317,13 +317,15 @@
                                                      Value="{Binding SelectedDeviceDetail.DiskUsagePercentage, Mode=OneWay, FallbackValue=0}" Margin="0,0,0,8" />
                                         <DockPanel>
                                             <TextBlock Text="{Binding SelectedDeviceDetail.UsedDiskText, StringFormat='已用: {0}'}" FontSize="11" Foreground="#64748B" />
-                                            <TextBlock DockPanel.Dock="Right" Text="{Binding SelectedDeviceDetail.TotalDiskCapacityText, StringFormat='总容量: {0}'}"
-                                                       FontSize="11" Foreground="#64748B" HorizontalAlignment="Right" />
+                                            <TextBlock DockPanel.Dock="Right" Text="{Binding SelectedDeviceDetail.AvailableDiskText, StringFormat='可用: {0}'}"
+                                                       FontSize="11" Foreground="#15803D" FontWeight="SemiBold" HorizontalAlignment="Right" />
                                         </DockPanel>
+                                        <TextBlock Text="{Binding SelectedDeviceDetail.TotalDiskCapacityText, StringFormat='总容量: {0}'}"
+                                                   FontSize="11" Foreground="#64748B" Margin="0,4,0,0" />
                                     </StackPanel>
                                 </Border>
 
-                                <!-- 电池健康 -->
+                                <!-- 电池健康 (100% 真实 AppleSmartBattery 底层数据) -->
                                 <Border Grid.Column="1" Style="{StaticResource Card}" Margin="6,0,0,0">
                                     <StackPanel>
                                         <TextBlock Text="🔋 电池健康度与状态" FontSize="13" FontWeight="SemiBold" Foreground="#0F172A" Margin="0,0,0,8" />
@@ -333,24 +335,29 @@
                                                 <ColumnDefinition Width="*" />
                                             </Grid.ColumnDefinitions>
                                             <StackPanel Grid.Column="0">
-                                                <TextBlock Text="当前电量" FontSize="11" Foreground="#64748B" />
-                                                <TextBlock Text="{Binding SelectedDeviceDetail.BatteryCurrentCapacity, StringFormat='{}{0}%'}"
-                                                           FontSize="16" FontWeight="Bold" Foreground="#16A34A" Margin="0,2,0,0" />
+                                                <TextBlock Text="当前电量 / 充电状态" FontSize="11" Foreground="#64748B" />
+                                                <TextBlock Text="{Binding SelectedDeviceDetail.ChargingStatusText, FallbackValue='--'}"
+                                                           FontSize="15" FontWeight="Bold" Foreground="#16A34A" Margin="0,2,0,0" />
                                             </StackPanel>
                                             <StackPanel Grid.Column="1">
-                                                <TextBlock Text="循环次数 / 电池效率" FontSize="11" Foreground="#64748B" />
-                                                <TextBlock Text="{Binding SelectedDeviceDetail.BatteryHealthText, FallbackValue='100%'}"
-                                                           FontSize="14" FontWeight="SemiBold" Foreground="#0F172A" Margin="0,4,0,0" />
+                                                <TextBlock Text="电池寿命 / 循环次数" FontSize="11" Foreground="#64748B" />
+                                                <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                                    <TextBlock Text="寿命: " FontSize="13" Foreground="#64748B" />
+                                                    <TextBlock Text="{Binding SelectedDeviceDetail.BatteryHealthText, FallbackValue='--'}"
+                                                               FontSize="14" FontWeight="Bold" Foreground="#0F172A" />
+                                                </StackPanel>
+                                                <TextBlock Text="{Binding SelectedDeviceDetail.BatteryCycleCount, StringFormat='充电 {0} 次', FallbackValue='--'}"
+                                                           FontSize="11" Foreground="#64748B" Margin="0,2,0,0" />
                                             </StackPanel>
                                         </Grid>
                                     </StackPanel>
                                 </Border>
                             </Grid>
 
-                            <!-- 硬件与型号参数 -->
+                            <!-- 硬件与型号参数 (对标爱思助手 100% 真实参数) -->
                             <Border Style="{StaticResource Card}" Margin="0,0,0,12">
                                 <StackPanel>
-                                    <TextBlock Text="🛠 硬件参数与序列号" FontSize="13" FontWeight="SemiBold" Foreground="#0F172A" Margin="0,0,0,10" />
+                                    <TextBlock Text="🛠 硬件参数与真实出厂信息" FontSize="13" FontWeight="SemiBold" Foreground="#0F172A" Margin="0,0,0,10" />
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
@@ -361,15 +368,18 @@
                                             <RowDefinition Height="26" />
                                             <RowDefinition Height="26" />
                                             <RowDefinition Height="26" />
+                                            <RowDefinition Height="26" />
+                                            <RowDefinition Height="26" />
+                                            <RowDefinition Height="Auto" />
                                         </Grid.RowDefinitions>
 
                                         <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal">
-                                            <TextBlock Text="设备型号:" Width="90" FontSize="12" Foreground="#64748B" />
-                                            <TextBlock Text="{Binding SelectedDeviceDetail.ModelNumber, FallbackValue='--'}" FontSize="12" FontWeight="Medium" />
+                                            <TextBlock Text="型号/代号:" Width="90" FontSize="12" Foreground="#64748B" />
+                                            <TextBlock Text="{Binding SelectedDeviceDetail.FullModelName, FallbackValue='--'}" FontSize="12" FontWeight="Medium" />
                                         </StackPanel>
                                         <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal">
-                                            <TextBlock Text="内部代号:" Width="90" FontSize="12" Foreground="#64748B" />
-                                            <TextBlock Text="{Binding SelectedDeviceDetail.ProductType, FallbackValue='--'}" FontSize="12" FontWeight="Medium" />
+                                            <TextBlock Text="销售地区:" Width="90" FontSize="12" Foreground="#64748B" />
+                                            <TextBlock Text="{Binding SelectedDeviceDetail.SalesRegion, FallbackValue='中国 (国行)'}" FontSize="12" FontWeight="Medium" />
                                         </StackPanel>
 
                                         <StackPanel Grid.Row="1" Grid.Column="0" Orientation="Horizontal">
@@ -377,20 +387,47 @@
                                             <TextBlock Text="{Binding SelectedDeviceDetail.SerialNumber, FallbackValue='--'}" FontSize="12" FontWeight="Medium" />
                                         </StackPanel>
                                         <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal">
-                                            <TextBlock Text="CPU架构:" Width="90" FontSize="12" Foreground="#64748B" />
-                                            <TextBlock Text="{Binding SelectedDeviceDetail.CpuArchitecture, FallbackValue='--'}" FontSize="12" FontWeight="Medium" />
+                                            <TextBlock Text="生产日期:" Width="90" FontSize="12" Foreground="#64748B" />
+                                            <TextBlock Text="{Binding SelectedDeviceDetail.ProductionDate, FallbackValue='--'}" FontSize="12" FontWeight="Medium" Foreground="#2563EB" />
                                         </StackPanel>
 
                                         <StackPanel Grid.Row="2" Grid.Column="0" Orientation="Horizontal">
+                                            <TextBlock Text="激活锁(ID锁):" Width="90" FontSize="12" Foreground="#64748B" />
+                                            <TextBlock Text="{Binding SelectedDeviceDetail.ActivationLockStatus, FallbackValue='未开启'}" FontSize="12" FontWeight="SemiBold" Foreground="#DC2626" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal">
+                                            <TextBlock Text="iCloud状态:" Width="90" FontSize="12" Foreground="#64748B" />
+                                            <TextBlock Text="{Binding SelectedDeviceDetail.ICloudStatus, FallbackValue='未开启'}" FontSize="12" FontWeight="SemiBold" Foreground="#15803D" />
+                                        </StackPanel>
+
+                                        <StackPanel Grid.Row="3" Grid.Column="0" Orientation="Horizontal">
+                                            <TextBlock Text="CPU / 架构:" Width="90" FontSize="12" Foreground="#64748B" />
+                                            <TextBlock Text="{Binding SelectedDeviceDetail.CpuArchitecture, FallbackValue='--'}" FontSize="12" FontWeight="Medium" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal">
+                                            <TextBlock Text="硬件代号:" Width="90" FontSize="12" Foreground="#64748B" />
+                                            <TextBlock Text="{Binding SelectedDeviceDetail.HardwareModel, FallbackValue='--'}" FontSize="12" FontWeight="Medium" />
+                                        </StackPanel>
+
+                                        <StackPanel Grid.Row="4" Grid.Column="0" Orientation="Horizontal">
                                             <TextBlock Text="Wi-Fi MAC:" Width="90" FontSize="12" Foreground="#64748B" />
                                             <TextBlock Text="{Binding SelectedDeviceDetail.WiFiAddress, FallbackValue='--'}" FontSize="12" FontWeight="Medium" />
                                         </StackPanel>
-                                        <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal">
+                                        <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal">
                                             <TextBlock Text="蓝牙地址:" Width="90" FontSize="12" Foreground="#64748B" />
                                             <TextBlock Text="{Binding SelectedDeviceDetail.BluetoothAddress, FallbackValue='--'}" FontSize="12" FontWeight="Medium" />
                                         </StackPanel>
 
-                                        <StackPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal">
+                                        <StackPanel Grid.Row="5" Grid.Column="0" Orientation="Horizontal">
+                                            <TextBlock Text="蜂窝基带:" Width="90" FontSize="12" Foreground="#64748B" />
+                                            <TextBlock Text="{Binding SelectedDeviceDetail.BasebandVersion, FallbackValue='--'}" FontSize="12" FontWeight="Medium" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="5" Grid.Column="1" Orientation="Horizontal">
+                                            <TextBlock Text="IMEI:" Width="90" FontSize="12" Foreground="#64748B" />
+                                            <TextBlock Text="{Binding SelectedDeviceDetail.InternationalMobileEquipmentIdentity, FallbackValue='--'}" FontSize="12" FontWeight="Medium" />
+                                        </StackPanel>
+
+                                        <StackPanel Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,4,0,0">
                                             <TextBlock Text="设备 UDID:" Width="90" FontSize="12" Foreground="#64748B" />
                                             <TextBox Text="{Binding SelectedDevice.Udid, Mode=OneWay}" IsReadOnly="True" BorderThickness="0"
                                                      Background="Transparent" FontSize="12" Foreground="#2563EB" />

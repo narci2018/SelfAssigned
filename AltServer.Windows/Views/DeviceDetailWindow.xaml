@@ -123,6 +123,8 @@
                                 <RowDefinition Height="26" />
                                 <RowDefinition Height="26" />
                                 <RowDefinition Height="26" />
+                                <RowDefinition Height="26" />
+                                <RowDefinition Height="26" />
                             </Grid.RowDefinitions>
 
                             <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal">
@@ -130,8 +132,8 @@
                                 <TextBlock x:Name="ModelNumberText" Text="--" Style="{StaticResource PropValue}" />
                             </StackPanel>
                             <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal">
-                                <TextBlock Text="内部型号:" Style="{StaticResource PropLabel}" />
-                                <TextBlock x:Name="ProductTypeText" Text="--" Style="{StaticResource PropValue}" />
+                                <TextBlock Text="销售地区:" Style="{StaticResource PropLabel}" />
+                                <TextBlock x:Name="RegionText" Text="--" Style="{StaticResource PropValue}" />
                             </StackPanel>
 
                             <StackPanel Grid.Row="1" Grid.Column="0" Orientation="Horizontal">
@@ -139,26 +141,44 @@
                                 <TextBlock x:Name="SerialNumberText" Text="--" Style="{StaticResource PropValue}" />
                             </StackPanel>
                             <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal">
+                                <TextBlock Text="生产日期:" Style="{StaticResource PropLabel}" />
+                                <TextBlock x:Name="ProductionDateText" Text="--" Style="{StaticResource PropValue}" Foreground="#2563EB" />
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="2" Grid.Column="0" Orientation="Horizontal">
+                                <TextBlock Text="内部代号:" Style="{StaticResource PropLabel}" />
+                                <TextBlock x:Name="ProductTypeText" Text="--" Style="{StaticResource PropValue}" />
+                            </StackPanel>
+                            <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal">
                                 <TextBlock Text="硬件代号:" Style="{StaticResource PropLabel}" />
                                 <TextBlock x:Name="HardwareModelText" Text="--" Style="{StaticResource PropValue}" />
                             </StackPanel>
 
-                            <StackPanel Grid.Row="2" Grid.Column="0" Orientation="Horizontal">
+                            <StackPanel Grid.Row="3" Grid.Column="0" Orientation="Horizontal">
                                 <TextBlock Text="CPU 架构:" Style="{StaticResource PropLabel}" />
                                 <TextBlock x:Name="CpuText" Text="--" Style="{StaticResource PropValue}" />
-                            </StackPanel>
-                            <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal">
-                                <TextBlock Text="销售地区:" Style="{StaticResource PropLabel}" />
-                                <TextBlock x:Name="RegionText" Text="--" Style="{StaticResource PropValue}" />
-                            </StackPanel>
-
-                            <StackPanel Grid.Row="3" Grid.Column="0" Orientation="Horizontal">
-                                <TextBlock Text="固件版本:" Style="{StaticResource PropLabel}" />
-                                <TextBlock x:Name="BuildVersionText" Text="--" Style="{StaticResource PropValue}" />
                             </StackPanel>
                             <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal">
                                 <TextBlock Text="监管型号:" Style="{StaticResource PropLabel}" />
                                 <TextBlock x:Name="RegulatoryModelText" Text="--" Style="{StaticResource PropValue}" />
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="4" Grid.Column="0" Orientation="Horizontal">
+                                <TextBlock Text="固件版本:" Style="{StaticResource PropLabel}" />
+                                <TextBlock x:Name="BuildVersionText" Text="--" Style="{StaticResource PropValue}" />
+                            </StackPanel>
+                            <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal">
+                                <TextBlock Text="越狱状态:" Style="{StaticResource PropLabel}" />
+                                <TextBlock Text="未越狱" Style="{StaticResource PropValue}" Foreground="#15803D" />
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="5" Grid.Column="0" Orientation="Horizontal">
+                                <TextBlock Text="激活锁(ID锁):" Style="{StaticResource PropLabel}" />
+                                <TextBlock x:Name="ActivationLockText" Text="--" Style="{StaticResource PropValue}" Foreground="#DC2626" FontWeight="SemiBold" />
+                            </StackPanel>
+                            <StackPanel Grid.Row="5" Grid.Column="1" Orientation="Horizontal">
+                                <TextBlock Text="iCloud状态:" Style="{StaticResource PropLabel}" />
+                                <TextBlock x:Name="ICloudText" Text="--" Style="{StaticResource PropValue}" Foreground="#15803D" FontWeight="SemiBold" />
                             </StackPanel>
                         </Grid>
                     </StackPanel>
@@ -174,6 +194,7 @@
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
                             <Grid.RowDefinitions>
+                                <RowDefinition Height="26" />
                                 <RowDefinition Height="26" />
                                 <RowDefinition Height="26" />
                                 <RowDefinition Height="Auto" />
@@ -193,11 +214,20 @@
                                 <TextBlock x:Name="BasebandText" Text="--" Style="{StaticResource PropValue}" />
                             </StackPanel>
                             <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal">
-                                <TextBlock Text="IMEI:" Style="{StaticResource PropLabel}" />
-                                <TextBlock x:Name="ImeiText" Text="--" Style="{StaticResource PropValue}" />
+                                <TextBlock Text="运营商:" Style="{StaticResource PropLabel}" />
+                                <TextBlock x:Name="CarrierText" Text="--" Style="{StaticResource PropValue}" />
                             </StackPanel>
 
-                            <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,4,0,0">
+                            <StackPanel Grid.Row="2" Grid.Column="0" Orientation="Horizontal">
+                                <TextBlock Text="IMEI1:" Style="{StaticResource PropLabel}" />
+                                <TextBlock x:Name="ImeiText" Text="--" Style="{StaticResource PropValue}" />
+                            </StackPanel>
+                            <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal">
+                                <TextBlock Text="IMEI2:" Style="{StaticResource PropLabel}" />
+                                <TextBlock x:Name="Imei2Text" Text="--" Style="{StaticResource PropValue}" />
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,4,0,0">
                                 <TextBlock Text="设备 UDID:" Style="{StaticResource PropLabel}" />
                                 <TextBox x:Name="UdidBox" Text="--" IsReadOnly="True" BorderThickness="0" Background="Transparent"
                                          FontSize="12" Foreground="#2563EB" VerticalAlignment="Center" />

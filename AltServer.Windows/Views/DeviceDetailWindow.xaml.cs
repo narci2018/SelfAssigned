@@ -53,20 +53,25 @@ public partial class DeviceDetailWindow : Window
         BatteryHealthText.Text = $"{cycles} (效率 {info.BatteryHealthText})";
 
         // 硬件参数
-        ModelNumberText.Text = !string.IsNullOrEmpty(info.ModelNumber) ? info.ModelNumber : "--";
+        ModelNumberText.Text = !string.IsNullOrEmpty(info.FullModelName) ? info.FullModelName : info.ModelNumber;
         ProductTypeText.Text = !string.IsNullOrEmpty(info.ProductType) ? info.ProductType : "--";
         SerialNumberText.Text = !string.IsNullOrEmpty(info.SerialNumber) ? info.SerialNumber : "--";
+        ProductionDateText.Text = !string.IsNullOrEmpty(info.ProductionDate) ? info.ProductionDate : "--";
         HardwareModelText.Text = !string.IsNullOrEmpty(info.HardwareModel) ? info.HardwareModel : "--";
         CpuText.Text = !string.IsNullOrEmpty(info.CpuArchitecture) ? info.CpuArchitecture : "--";
-        RegionText.Text = !string.IsNullOrEmpty(info.RegionInfo) ? info.RegionInfo : "国行 / 通用";
+        RegionText.Text = !string.IsNullOrEmpty(info.SalesRegion) ? info.SalesRegion : (info.RegionInfo ?? "国行 / 通用");
         BuildVersionText.Text = !string.IsNullOrEmpty(info.BuildVersion) ? info.BuildVersion : "--";
         RegulatoryModelText.Text = !string.IsNullOrEmpty(info.RegulatoryModelNumber) ? info.RegulatoryModelNumber : "--";
+        ActivationLockText.Text = !string.IsNullOrEmpty(info.ActivationLockStatus) ? info.ActivationLockStatus : "未开启";
+        ICloudText.Text = !string.IsNullOrEmpty(info.ICloudStatus) ? info.ICloudStatus : "未开启";
 
         // 网络参数
         WifiMacText.Text = !string.IsNullOrEmpty(info.WiFiAddress) ? info.WiFiAddress : "--";
         BluetoothText.Text = !string.IsNullOrEmpty(info.BluetoothAddress) ? info.BluetoothAddress : "--";
         BasebandText.Text = !string.IsNullOrEmpty(info.BasebandVersion) ? info.BasebandVersion : "--";
+        CarrierText.Text = !string.IsNullOrEmpty(info.CarrierName) ? info.CarrierName : "--";
         ImeiText.Text = !string.IsNullOrEmpty(info.InternationalMobileEquipmentIdentity) ? info.InternationalMobileEquipmentIdentity : "--";
+        Imei2Text.Text = !string.IsNullOrEmpty(info.Imei2) ? info.Imei2 : "--";
         UdidBox.Text = info.Udid;
     }
 

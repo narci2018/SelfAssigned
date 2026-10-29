@@ -314,7 +314,7 @@
                                     <StackPanel>
                                         <TextBlock Text="💾 存储空间占用" FontSize="13" FontWeight="SemiBold" Foreground="#0F172A" Margin="0,0,0,8" />
                                         <ProgressBar Height="10" Background="#E2E8F0" Foreground="#2563EB"
-                                                     Value="{Binding SelectedDeviceDetail.DiskUsagePercentage, FallbackValue=0}" Margin="0,0,0,8" />
+                                                     Value="{Binding SelectedDeviceDetail.DiskUsagePercentage, Mode=OneWay, FallbackValue=0}" Margin="0,0,0,8" />
                                         <DockPanel>
                                             <TextBlock Text="{Binding SelectedDeviceDetail.UsedDiskText, StringFormat='已用: {0}'}" FontSize="11" Foreground="#64748B" />
                                             <TextBlock DockPanel.Dock="Right" Text="{Binding SelectedDeviceDetail.TotalDiskCapacityText, StringFormat='总容量: {0}'}"

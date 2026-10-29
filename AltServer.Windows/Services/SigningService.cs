@@ -27,6 +27,7 @@ public class SigningService
         public string DisplayName { get; set; } = string.Empty;
         public bool RemoveQuartzDebug { get; set; }
         public string EntitlementsPath { get; set; } = string.Empty;
+        public bool RemoveExtensions { get; set; } = true;
     }
 
     /// <summary>签名IPA文件</summary>
@@ -73,6 +74,12 @@ public class SigningService
         {
             if (!File.Exists(options.MobileProvisionPath)) throw new FileNotFoundException("找不到配置文件 (.mobileprovision)", options.MobileProvisionPath);
             sb.Append($" -m \"{options.MobileProvisionPath}\"");
+
+            var expiry = ParseProvisionExpiry(options.MobileProvisionPath);
+            if (expiry.HasValue && expiry.Value < DateTime.Now)
+            {
+                LogService.Warning($"[Sign] ⚠️ 警告: 描述文件已于 {expiry.Value:yyyy-MM-dd HH:mm} 过期！iOS 设备会拦截安装 (错误 0xe8008015)。请重新生成或导入新描述文件。");
+            }
         }
 
         if (!string.IsNullOrEmpty(options.BundleId))
@@ -83,6 +90,9 @@ public class SigningService
 
         if (options.RemoveQuartzDebug)
             sb.Append(" --remove-quartz-debug");
+
+        if (options.RemoveExtensions)
+            sb.Append(" -E");
 
         if (!string.IsNullOrEmpty(options.EntitlementsPath) && File.Exists(options.EntitlementsPath))
             sb.Append($" -e \"{options.EntitlementsPath}\"");
@@ -245,18 +255,13 @@ public class SigningService
         try
         {
             var bytes = File.ReadAllBytes(mobileProvisionPath);
-
-            // 二进制plist是XML格式嵌入的，提取<ExpirationDate>
             var text = Encoding.UTF8.GetString(bytes);
-            const string marker = "<key>ExpirationDate</key><date>";
-            var idx = text.IndexOf(marker, StringComparison.Ordinal);
-            if (idx < 0) return null;
 
-            var start = idx + marker.Length;
-            var end = text.IndexOf("</date>", start, StringComparison.Ordinal);
-            if (end < 0) return null;
+            // 提取 <key>ExpirationDate</key>\s*<date>(.*?)</date>
+            var match = System.Text.RegularExpressions.Regex.Match(text, @"<key>ExpirationDate</key>\s*<date>(.*?)</date>", System.Text.RegularExpressions.RegexOptions.Singleline);
+            if (!match.Success) return null;
 
-            var dateStr = text[start..end];
+            var dateStr = match.Groups[1].Value.Trim();
             if (DateTime.TryParse(dateStr, System.Globalization.CultureInfo.InvariantCulture,
                 System.Globalization.DateTimeStyles.AdjustToUniversal, out var utcDate))
             {

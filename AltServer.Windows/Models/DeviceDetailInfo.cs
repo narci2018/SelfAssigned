@@ -52,6 +52,7 @@ public class DeviceDetailInfo
             var used = total - TotalDataAvailable;
             return Math.Clamp((double)used / total * 100, 0, 100);
         }
+        set { }
     }
 
     // 激活与网络

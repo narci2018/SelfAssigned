@@ -93,7 +93,7 @@ public class PhotosService
             string foundPath = string.Empty;
             foreach (var p in possibleDbPaths)
             {
-                var info = afc.GetFileInfo(p);
+                var info = afc.TryGetFileInfo(p);
                 if (info != null && info.Count > 0)
                 {
                     foundPath = p;
@@ -133,7 +133,6 @@ public class PhotosService
     private List<AlbumCategory> ParsePhotosSqlite(string dbPath, DeviceNative.AfcClient afc)
     {
         var allFiles = new List<MediaFile>();
-        var albumDict = new Dictionary<string, List<MediaFile>>(StringComparer.OrdinalIgnoreCase);
 
         var connString = new SqliteConnectionStringBuilder
         {
@@ -145,14 +144,44 @@ public class PhotosService
         {
             connection.Open();
 
-            // 查询全部照片资产
+            // 自动检测表名：iOS 15+ 常用 ZASSET，更早版本为 ZGENERICASSET
+            string assetTable = "ZASSET";
+            using (var checkCmd = connection.CreateCommand())
+            {
+                checkCmd.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('ZASSET', 'ZGENERICASSET') ORDER BY CASE WHEN name='ZASSET' THEN 1 ELSE 2 END LIMIT 1;";
+                var found = checkCmd.ExecuteScalar() as string;
+                if (!string.IsNullOrEmpty(found)) assetTable = found;
+            }
+
+            // 检查是否存在 ZADDITIONALASSETATTRIBUTES 属性表以获取文件大小
+            bool hasAdditionalAttributes = false;
+            using (var checkCmd = connection.CreateCommand())
+            {
+                checkCmd.CommandText = "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='ZADDITIONALASSETATTRIBUTES';";
+                var cnt = Convert.ToInt64(checkCmd.ExecuteScalar() ?? 0);
+                hasAdditionalAttributes = cnt > 0;
+            }
+
             using var cmd = connection.CreateCommand();
-            cmd.CommandText = @"
-                SELECT 
-                    ZDIRECTORY, ZFILENAME, ZFAVORITE, ZDATECREATED
-                FROM ZGENERICASSET
-                WHERE ZFILENAME IS NOT NULL
-                ORDER BY ZDATECREATED DESC";
+            if (hasAdditionalAttributes)
+            {
+                cmd.CommandText = $@"
+                    SELECT 
+                        a.ZDIRECTORY, a.ZFILENAME, a.ZFAVORITE, a.ZDATECREATED, att.ZORIGINALFILESIZE
+                    FROM {assetTable} a
+                    LEFT JOIN ZADDITIONALASSETATTRIBUTES att ON a.ZADDITIONALATTRIBUTES = att.Z_PK
+                    WHERE a.ZFILENAME IS NOT NULL
+                    ORDER BY a.ZDATECREATED DESC";
+            }
+            else
+            {
+                cmd.CommandText = $@"
+                    SELECT 
+                        ZDIRECTORY, ZFILENAME, ZFAVORITE, ZDATECREATED, 0
+                    FROM {assetTable}
+                    WHERE ZFILENAME IS NOT NULL
+                    ORDER BY ZDATECREATED DESC";
+            }
 
             try
             {
@@ -171,12 +200,19 @@ public class PhotosService
                         dateCreated = new DateTime(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(seconds).ToLocalTime();
                     }
 
+                    long fileSize = 0;
+                    if (!reader.IsDBNull(4))
+                    {
+                        fileSize = reader.GetInt64(4);
+                    }
+
                     // 规范化文件在设备上的路径
                     var afcPath = NormalizeAfcPath(dir, fname);
                     allFiles.Add(new MediaFile
                     {
                         AfcPath = afcPath,
                         Name = fname,
+                        SizeBytes = fileSize,
                         Modified = dateCreated,
                         IsFavorite = fav
                     });
@@ -184,7 +220,7 @@ public class PhotosService
             }
             catch (Exception ex)
             {
-                LogService.Warning($"[相册] 查询 ZGENERICASSET 出错: {ex.Message}");
+                LogService.Warning($"[相册] 查询 {assetTable} 出错: {ex.Message}");
             }
         }
 
@@ -195,6 +231,23 @@ public class PhotosService
             new() { Name = "个人收藏", Files = allFiles.Where(f => f.IsFavorite).ToList(), Count = allFiles.Count(f => f.IsFavorite) },
             new() { Name = "视频", Files = allFiles.Where(f => f.IsVideo).ToList(), Count = allFiles.Count(f => f.IsVideo) }
         };
+
+        // 按卷目录（如 100APPLE, 106APPLE）分组出“我的相簿”
+        var albumGroups = allFiles
+            .GroupBy(f => Path.GetDirectoryName(f.AfcPath)?.Replace('\\', '/').Split('/').LastOrDefault() ?? "未命名")
+            .Where(g => !string.IsNullOrEmpty(g.Key) && !g.Key.Equals("DCIM", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(g => g.Key);
+
+        foreach (var grp in albumGroups)
+        {
+            var list = grp.ToList();
+            categories.Add(new AlbumCategory
+            {
+                Name = grp.Key,
+                Files = list,
+                Count = list.Count
+            });
+        }
 
         return categories;
     }

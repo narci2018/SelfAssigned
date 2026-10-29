@@ -269,8 +269,17 @@ public class MainViewModel : ObservableObject
             var expiry = SigningService.ParseProvisionExpiry(value);
             if (expiry is not null)
             {
-                ProvisionExpiryText = $"配置文件有效期至: {expiry:yyyy-MM-dd HH:mm} (剩余{Math.Max(0, (int)(expiry.Value - DateTime.Now).TotalDays)}天)";
-                ProvisionRemainingDays = Math.Max(0, (int)(expiry.Value - DateTime.Now).TotalDays);
+                if (expiry.Value < DateTime.Now)
+                {
+                    ProvisionExpiryText = $"⚠️ 描述文件已于 {expiry:yyyy-MM-dd HH:mm} 过期";
+                    ProvisionRemainingDays = -1;
+                }
+                else
+                {
+                    var rem = Math.Max(0, (int)Math.Ceiling((expiry.Value - DateTime.Now).TotalDays));
+                    ProvisionExpiryText = $"配置文件有效期至: {expiry:yyyy-MM-dd HH:mm} (剩余 {rem} 天)";
+                    ProvisionRemainingDays = rem;
+                }
             }
             else
             {
@@ -483,6 +492,13 @@ public class MainViewModel : ObservableObject
         foreach (var cfg in _settings.Data.DeviceConfigs.Values)
         {
             var expiry = SigningService.ParseProvisionExpiry(cfg.MobileProvisionPath);
+            if (expiry.HasValue && (earliest is null || expiry < earliest))
+                earliest = expiry;
+        }
+
+        if (!string.IsNullOrEmpty(_settings.Data.MobileProvisionPath))
+        {
+            var expiry = SigningService.ParseProvisionExpiry(_settings.Data.MobileProvisionPath);
             if (expiry.HasValue && (earliest is null || expiry < earliest))
                 earliest = expiry;
         }
@@ -713,7 +729,15 @@ public class MainViewModel : ObservableObject
             var expiry = SigningService.ParseProvisionExpiry(MobileProvisionPath);
             if (expiry is not null)
             {
-                ProvisionExpiryText = $"有效期至: {expiry:yyyy-MM-dd HH:mm} (剩余 {Math.Max(0, (int)(expiry.Value - DateTime.Now).TotalDays)} 天)";
+                if (expiry.Value < DateTime.Now)
+                {
+                    ProvisionExpiryText = $"⚠️ 描述文件已过期 ({expiry:yyyy-MM-dd HH:mm})，请重新登录续期";
+                }
+                else
+                {
+                    var rem = Math.Max(0, (int)Math.Ceiling((expiry.Value - DateTime.Now).TotalDays));
+                    ProvisionExpiryText = $"有效期至: {expiry:yyyy-MM-dd HH:mm} (剩余 {rem} 天)";
+                }
             }
             else
             {

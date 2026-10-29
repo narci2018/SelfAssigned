@@ -168,13 +168,15 @@ public static class DeviceNative
         /// <summary>启动 lockdown 服务：优先使用 escrow bag（iOS 17+ 的 screenshotr/afc 等服务需要）；失败则回落到无 escrow bag 版本</summary>
         private IntPtr StartService(string serviceName)
         {
-            // 优先使用 with_escrow_bag：iOS 17+ 的 screenshotr、afc 等服务需要
-            // escrow bag 提供更高信任级别，否则 lockdownd 返回 -27
-            var rc = lockdownd_start_service_with_escrow_bag(_lockdown, serviceName, out var descriptor);
-            if (rc == 0) return descriptor;
+            // 只有特定需要更高权限的调试/截屏服务尝试 escrow bag
+            if (serviceName.Contains("screenshotr"))
+            {
+                var rcEscrow = lockdownd_start_service_with_escrow_bag(_lockdown, serviceName, out var descEscrow);
+                if (rcEscrow == 0) return descEscrow;
+            }
 
-            // 回落到普通版本（兼容旧版 libimobiledevice 或不需要 escrow bag 的服务）
-            Check($"lockdownd_start_service({serviceName})", lockdownd_start_service(_lockdown, serviceName, out descriptor));
+            // 普通服务（com.apple.afc 等）直接使用标准的 lockdownd_start_service
+            Check($"lockdownd_start_service({serviceName})", lockdownd_start_service(_lockdown, serviceName, out var descriptor));
             return descriptor;
         }
 
@@ -245,7 +247,7 @@ public static class DeviceNative
 
                     return names.Select(n =>
                     {
-                        var info = GetFileInfoInternal($"{path.TrimEnd('/')}/{n}");
+                        var info = TryGetFileInfoInternal($"{path.TrimEnd('/')}/{n}") ?? new Dictionary<string, string>();
                         var isDir = info.TryGetValue("st_ifmt", out var ifmt) && ifmt.Contains("S_IFDIR");
                         var size = info.TryGetValue("st_size", out var sz) && long.TryParse(sz, out var s) ? s : 0;
                         var mtime = info.TryGetValue("st_mtime", out var mt) && long.TryParse(mt, out var m)
@@ -279,6 +281,11 @@ public static class DeviceNative
             lock (_lock) return GetFileInfoInternal(path);
         }
 
+        public Dictionary<string, string>? TryGetFileInfo(string path)
+        {
+            lock (_lock) return TryGetFileInfoInternal(path);
+        }
+
         private Dictionary<string, string> GetFileInfoInternal(string path)
         {
             Check("afc_get_file_info", afc_get_file_info(_client, path, out var info));
@@ -291,6 +298,30 @@ public static class DeviceNative
                     dict[items[i]] = items[i + 1];
                 }
                 return dict;
+            }
+            finally
+            {
+                FreeStringArray(info);
+            }
+        }
+
+        private Dictionary<string, string>? TryGetFileInfoInternal(string path)
+        {
+            var rc = afc_get_file_info(_client, path, out var info);
+            if (rc != 0 || info == IntPtr.Zero) return null;
+            try
+            {
+                var items = ReadStringArray(info);
+                var dict = new Dictionary<string, string>();
+                for (var i = 0; i + 1 < items.Length; i += 2)
+                {
+                    dict[items[i]] = items[i + 1];
+                }
+                return dict;
+            }
+            catch
+            {
+                return null;
             }
             finally
             {

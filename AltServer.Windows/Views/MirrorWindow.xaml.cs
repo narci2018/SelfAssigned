@@ -197,4 +197,43 @@ public partial class MirrorWindow : Window
             System.Windows.MessageBox.Show(this, $"保存失败: {ex.Message}", "保存截图", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
         }
     }
+
+    private void OnLaunchAirPlayer(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var airPlayerInstaller = @"C:\Program Files\i4Tools9\extrastools\i4AirPlayer3\i4AirPlayer_v6.2.10_Setup_x64_700016.exe";
+            if (File.Exists(airPlayerInstaller))
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = airPlayerInstaller,
+                    UseShellExecute = true
+                });
+                LogService.Info("已启动爱思 AirPlayer 投屏组件");
+                return;
+            }
+
+            var candidates = new[]
+            {
+                @"C:\Program Files\i4AirPlayer\i4AirPlayer.exe",
+                @"C:\Program Files (x86)\i4AirPlayer\i4AirPlayer.exe"
+            };
+
+            var exe = candidates.FirstOrDefault(File.Exists);
+            if (exe != null)
+            {
+                Process.Start(new ProcessStartInfo { FileName = exe, UseShellExecute = true });
+                LogService.Info("已启动爱思 AirPlayer");
+            }
+            else
+            {
+                System.Windows.MessageBox.Show("未在系统中检测到 AirPlayer，请直接通过爱思助手启动投屏功能。", "投屏组件", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Warning($"启动 AirPlayer 失败: {ex.Message}");
+        }
+    }
 }

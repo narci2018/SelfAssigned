@@ -265,9 +265,19 @@ public static class DeviceNative
                         var info = TryGetFileInfoInternal($"{path.TrimEnd('/')}/{n}") ?? new Dictionary<string, string>();
                         var isDir = info.TryGetValue("st_ifmt", out var ifmt) && ifmt.Contains("S_IFDIR");
                         var size = info.TryGetValue("st_size", out var sz) && long.TryParse(sz, out var s) ? s : 0;
-                        var mtime = info.TryGetValue("st_mtime", out var mt) && long.TryParse(mt, out var m)
-                            ? DateTimeOffset.FromUnixTimeSeconds(m).LocalDateTime
-                            : DateTime.MinValue;
+                        var mtime = DateTime.MinValue;
+                        if (info.TryGetValue("st_mtime", out var mt) && long.TryParse(mt, out var m))
+                        {
+                            try
+                            {
+                                if (m > 10_000_000_000_000_000L) m /= 1_000_000_000L;
+                                else if (m > 10_000_000_000_000L) m /= 1_000_000L;
+                                else if (m > 10_000_000_000L) m /= 1_000L;
+                                if (m >= 0 && m <= 253402300799L)
+                                    mtime = DateTimeOffset.FromUnixTimeSeconds(m).LocalDateTime;
+                            }
+                            catch { }
+                        }
                         return new DirEntry { Name = n, IsDirectory = isDir, SizeBytes = size, Modified = mtime };
                     }).ToArray();
                 }

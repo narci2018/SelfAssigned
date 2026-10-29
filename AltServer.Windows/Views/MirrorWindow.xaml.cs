@@ -90,17 +90,21 @@ public partial class MirrorWindow : Window
             }
             catch (Exception ex)
             {
-                // 截图失败常见原因：设备锁屏、USB 断开、配对失效
+                // 截图失败常见原因：设备锁屏、USB 断开、服务未授权(-27)
                 _sessionBroken = true;
                 Dispatcher.BeginInvoke(() =>
                 {
-                    PlaceholderText.Text = "画面暂不可用";
-                    var tip = ex.Message.Contains("-27")
-                        ? "（iOS 需要设备开启「开发者模式」并挂载 DeveloperDiskImage 调试镜像才能启用原生截屏服务）"
-                        : "（请确认设备已解锁、已在手机上点击「信任此电脑」，将自动重试）";
-                    StatusText.Text = $"截屏失败: {ex.Message} {tip}";
+                    if (ex.Message.Contains("-27"))
+                    {
+                        AirPlayGuidePanel.Visibility = Visibility.Visible;
+                        StatusText.Text = "USB底层截屏受限(-27)，请点击窗口中「启动 AirPlay 投屏」或在手机开启开发者模式。";
+                    }
+                    else
+                    {
+                        StatusText.Text = $"截屏重试中: {ex.Message}";
+                    }
                 });
-                await Task.Delay(2500, ct);
+                await Task.Delay(3000, ct);
             }
 
             // 目标帧间隔 250ms（约 4 FPS），截图本身耗时已计入
@@ -137,9 +141,9 @@ public partial class MirrorWindow : Window
 
         Dispatcher.BeginInvoke(() =>
         {
-            PlaceholderText.Visibility = Visibility.Collapsed;
+            AirPlayGuidePanel.Visibility = Visibility.Collapsed;
             ScreenImage.Source = bitmap;
-            StatusText.Text = $"{_device.DisplayName} · {_lastPixelWidth}x{_lastPixelHeight} · {_fps:F1} FPS · 截图流预览（约2-5FPS）";
+            StatusText.Text = $"{_device.DisplayName} · {_lastPixelWidth}x{_lastPixelHeight} · {_fps:F1} FPS";
         });
     }
 
@@ -148,6 +152,40 @@ public partial class MirrorWindow : Window
     private void OnTopmostChanged(object sender, RoutedEventArgs e)
     {
         Topmost = TopmostBox.IsChecked == true;
+    }
+
+    private void OnStartAirPlay(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var candidates = new[]
+            {
+                @"C:\Program Files\i4AirPlayer\i4AirPlayer.exe",
+                @"C:\Program Files (x86)\i4AirPlayer\i4AirPlayer.exe",
+                @"C:\Program Files\i4Tools9\extrastools\i4AirPlayer3\i4AirPlayer_v6.2.10_Setup_x64_700016.exe"
+            };
+
+            var exe = candidates.FirstOrDefault(File.Exists);
+            if (exe != null)
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = exe,
+                    UseShellExecute = true,
+                    WorkingDirectory = Path.GetDirectoryName(exe)
+                });
+                StatusText.Text = "已启动投屏服务！请在 iPhone 控制中心点击「屏幕镜像」选择电脑连接。";
+            }
+            else
+            {
+                System.Windows.MessageBox.Show(this, "未检测到本地 AirPlay 投屏组件。请确认已安装投屏组件即可直接支持无线投屏。", "提示",
+                    System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"启动失败: {ex.Message}";
+        }
     }
 
     private async void OnRefreshOnce(object sender, RoutedEventArgs e)
@@ -161,11 +199,16 @@ public partial class MirrorWindow : Window
         }
         catch (Exception ex)
         {
-            var detail = ex.Message.Contains("-27")
-                ? "iOS 限制：底层截屏服务 (screenshotr) 需要设备开启「开发者模式」并挂载 DeveloperDiskImage 调试镜像才能启动。\n若未配置开发者调试环境，建议使用 iOS 控制中心的「屏幕镜像」(AirPlay) 进行投屏。"
-                : "请确认设备屏幕已解锁、已在屏幕上点击「信任此电脑」且 USB 连接稳定。";
-            System.Windows.MessageBox.Show(this, $"截屏失败: {ex.Message}\n\n{detail}", "投屏预览",
-                System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+            _sessionBroken = true;
+            if (ex.Message.Contains("-27"))
+            {
+                AirPlayGuidePanel.Visibility = Visibility.Visible;
+                StatusText.Text = "USB底层截屏受限(-27)，请点击窗口中「启动 AirPlay 投屏」进行无线投屏。";
+            }
+            else
+            {
+                StatusText.Text = $"刷新失败: {ex.Message}";
+            }
         }
     }
 

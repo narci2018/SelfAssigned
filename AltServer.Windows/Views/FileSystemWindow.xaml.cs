@@ -140,21 +140,24 @@ public partial class FileSystemWindow : Window
 
         try
         {
+            var files = dlg.FileNames;
             await Task.Run(() =>
             {
                 using var session = new DeviceNative.IdeviceSession(_device.Udid);
                 using var afc = session.CreateAfcClient();
 
-                for (int i = 0; i < dlg.FileNames.Length; i++)
+                for (int i = 0; i < files.Length; i++)
                 {
-                    var file = dlg.FileNames[i];
+                    var file = files[i];
                     var filename = Path.GetFileName(file);
                     var destAfcPath = _currentPath == "/" ? $"/{filename}" : $"{_currentPath.TrimEnd('/')}/{filename}";
+                    var currentIdx = i + 1;
+                    var total = files.Length;
 
-                    Dispatcher.BeginInvoke(() =>
+                    Dispatcher.Invoke(() =>
                     {
-                        StatusText.Text = $"正在上传 ({i + 1}/{dlg.FileNames.Length}): {filename}";
-                        ProgressBar.Value = (double)(i + 1) / dlg.FileNames.Length * 100;
+                        StatusText.Text = $"正在上传 ({currentIdx}/{total}): {filename}";
+                        ProgressBar.Value = (double)currentIdx / total * 100;
                     });
 
                     afc.WriteFile(destAfcPath, File.ReadAllBytes(file));
@@ -162,7 +165,6 @@ public partial class FileSystemWindow : Window
             });
 
             StatusText.Text = $"上传完成！共 {dlg.FileNames.Length} 个文件已写入设备。";
-            await NavigateToAsync(_currentPath);
         }
         catch (Exception ex)
         {
@@ -174,6 +176,7 @@ public partial class FileSystemWindow : Window
         {
             _busy = false;
             ProgressBar.Value = 0;
+            await NavigateToAsync(_currentPath);
         }
     }
 
@@ -232,11 +235,13 @@ public partial class FileSystemWindow : Window
                 {
                     var item = selected[i];
                     var dest = Path.Combine(fbd.SelectedPath, item.Name);
+                    var currentIdx = i + 1;
+                    var total = selected.Count;
 
-                    Dispatcher.BeginInvoke(() =>
+                    Dispatcher.Invoke(() =>
                     {
-                        StatusText.Text = $"正在导出 ({i + 1}/{selected.Count}): {item.Name}";
-                        ProgressBar.Value = (double)(i + 1) / selected.Count * 100;
+                        StatusText.Text = $"正在导出 ({currentIdx}/{total}): {item.Name}";
+                        ProgressBar.Value = (double)currentIdx / total * 100;
                     });
 
                     afc.StreamReadFile(item.FullPath, dest);

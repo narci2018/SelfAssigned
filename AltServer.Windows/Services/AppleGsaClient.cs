@@ -249,8 +249,11 @@ public class AppleGsaClient : IDisposable
                 return AuthResult.Success;
             }
 
-            LogService.Warning("[GSA] 密码通过，但获取 Xcode 会话令牌失败 (ec=-80046)");
-            return AuthResult.Error("Apple ID 账号验证通过，但获取开发者会话令牌受阻 (错误 -80046)。\n建议使用「自签名与安装」功能，直接导入已有的 P12 证书与描述文件进行安装。");
+            // Fallback: 如果 apptokens 未取到，以 adsid:GsIdmsToken 作为凭据
+            AuthToken = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{_adsId}:{_gsIdmsToken}"));
+            IsAuthenticated = true;
+            LogService.Info("[GSA] 认证成功 (密码已通过, 使用 GSA 身份令牌)");
+            return AuthResult.Success;
         }
         catch (TaskCanceledException)
         {
@@ -394,12 +397,15 @@ public class AppleGsaClient : IDisposable
             if (appToken != null)
             {
                 AuthToken = appToken;
-                IsAuthenticated = true;
-                return AuthResult.Success;
+            }
+            else
+            {
+                AuthToken = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{_adsId}:{_gsIdmsToken}"));
             }
 
-            LogService.Warning("[GSA] 2FA 验证通过，但获取 Xcode 会话令牌失败");
-            return AuthResult.Error("双重认证验证通过，但获取开发者会话令牌受阻 (错误 -80046)。\n建议使用「自签名与安装」直接导入证书/描述文件。");
+            IsAuthenticated = true;
+            LogService.Info("[GSA] 2FA 认证成功");
+            return AuthResult.Success;
         }
         catch (Exception ex)
         {
@@ -449,7 +455,7 @@ public class AppleGsaClient : IDisposable
                 ["u"] = _adsId
             };
 
-            var result = await GsRequest(paramsDict, anisette, isMacClient: true);
+            var result = await GsRequest(paramsDict, anisette);
             if (result == null)
             {
                 LogService.Error("[GSA] apptokens 请求失败");
@@ -925,7 +931,7 @@ public class AppleGsaClient : IDisposable
     // MARK: - GSA Request
 
     private async Task<Dictionary<string, string>?> GsRequest(
-        Dictionary<string, object> requestParams, AnisetteData anisette, bool isMacClient = false)
+        Dictionary<string, object> requestParams, AnisetteData anisette)
     {
         if (anisette == null)
         {
@@ -950,9 +956,9 @@ public class AppleGsaClient : IDisposable
         {
             Content = new StringContent(plistBody, Encoding.UTF8, "text/x-xml-plist")
         };
-        request.Headers.TryAddWithoutValidation("User-Agent", isMacClient ? MacUserAgent : GS_USER_AGENT);
+        request.Headers.TryAddWithoutValidation("User-Agent", GS_USER_AGENT);
         request.Headers.TryAddWithoutValidation("Accept", "*/*");
-        request.Headers.TryAddWithoutValidation("X-MMe-Client-Info", isMacClient ? MacClientInfo : DefaultClientInfo);
+        request.Headers.TryAddWithoutValidation("X-MMe-Client-Info", DefaultClientInfo);
         request.Headers.TryAddWithoutValidation("X-Apple-Client-App-Name", "akd");
         request.Headers.TryAddWithoutValidation("Connection", "close");
 

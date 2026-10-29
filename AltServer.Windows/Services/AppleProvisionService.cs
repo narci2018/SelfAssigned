@@ -780,12 +780,6 @@ public class AppleProvisionService
 
     private async Task<Dictionary<string, object>> SendXcodeRequestAsync(string action, Dictionary<string, object> parameters)
     {
-        var authToken = !string.IsNullOrEmpty(_gsa.AuthToken) ? _gsa.AuthToken : null;
-        if (string.IsNullOrEmpty(authToken))
-        {
-            throw new AppleAuthException("未检测到有效的开发者授权令牌 (AuthToken)。\n请在「Apple ID 登录」中重新登录，或使用「自签名与安装」直接导入已有证书及描述文件。");
-        }
-
         var url = $"{XCODE_SERVICES_BASE}/{action}?clientId={CLIENT_ID}";
         var plistXml = BuildPlist(parameters);
         var request = new HttpRequestMessage(HttpMethod.Post, url)
@@ -836,10 +830,17 @@ public class AppleProvisionService
         if (!string.IsNullOrEmpty(adsId))
             request.Headers.TryAddWithoutValidation("X-Apple-I-Identity-Id", adsId);
 
-        // 3. Grandslam Xcode Token
-        var authToken = !string.IsNullOrEmpty(_gsa.AuthToken) ? _gsa.AuthToken : null;
+        // 3. Grandslam Xcode Token / Identity Token
+        var authToken = !string.IsNullOrEmpty(_gsa.AuthToken)
+            ? _gsa.AuthToken
+            : (!string.IsNullOrEmpty(adsId) && !string.IsNullOrEmpty(_gsIdmsToken)
+                ? Convert.ToBase64String(Encoding.UTF8.GetBytes($"{adsId}:{_gsIdmsToken}"))
+                : null);
         if (!string.IsNullOrEmpty(authToken))
+        {
             request.Headers.TryAddWithoutValidation("X-Apple-GS-Token", authToken);
+            request.Headers.TryAddWithoutValidation("X-Apple-Identity-Token", authToken);
+        }
 
         // 4. Anisette 硬件/环境特征头
         var anisette = _gsa.Anisette;

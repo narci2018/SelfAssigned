@@ -135,6 +135,41 @@ public class MainViewModel : ObservableObject
 
     // MARK: - 绑定属性
 
+    private string _currentNavView = "device_info";
+    /// <summary>仿爱思助手左侧导航当前选中的视图模块（device_info, photos, apps, mirror, files, sign_install, logs）</summary>
+    public string CurrentNavView
+    {
+        get => _currentNavView;
+        set => SetField(ref _currentNavView, value);
+    }
+
+    private DeviceDetailInfo? _selectedDeviceDetail;
+    /// <summary>当前选中的设备详细全套信息（电池、存储、硬件等）</summary>
+    public DeviceDetailInfo? SelectedDeviceDetail
+    {
+        get => _selectedDeviceDetail;
+        set => SetField(ref _selectedDeviceDetail, value);
+    }
+
+    public async Task RefreshSelectedDeviceDetailAsync()
+    {
+        if (SelectedDevice is null)
+        {
+            SelectedDeviceDetail = null;
+            return;
+        }
+
+        try
+        {
+            var info = await Task.Run(() => _devices.GetDeviceDetailInfo(SelectedDevice.Udid));
+            SelectedDeviceDetail = info;
+        }
+        catch (Exception ex)
+        {
+            LogService.Warning($"[设备信息] 读取详情失败: {ex.Message}");
+        }
+    }
+
     public bool IsServerRunning
     {
         get => _isServerRunning;
@@ -168,6 +203,7 @@ public class MainViewModel : ObservableObject
                     }
                 }
                 LoadDeviceApp();
+                _ = RefreshSelectedDeviceDetailAsync();
             }
         }
     }
@@ -923,7 +959,7 @@ public class MainViewModel : ObservableObject
         }
     }
 
-    private void LoadDeviceApp()
+    public void LoadDeviceApp()
     {
         var device = SelectedDevice;
         var dispatcher = System.Windows.Application.Current?.Dispatcher;

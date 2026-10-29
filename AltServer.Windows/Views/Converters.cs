@@ -63,6 +63,38 @@ public class DaysRemainingBrushConverter : IValueConverter
         => throw new NotSupportedException();
 }
 
+/// <summary>导航项激活背景颜色转换器</summary>
+public class NavActiveBackgroundConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        var current = value as string ?? string.Empty;
+        var target = parameter as string ?? string.Empty;
+        return string.Equals(current, target, StringComparison.OrdinalIgnoreCase)
+            ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xDB, 0xEA, 0xFE)) // 浅蓝激活
+            : System.Windows.Media.Brushes.Transparent;
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+}
+
+/// <summary>导航项激活字体颜色转换器</summary>
+public class NavActiveForegroundConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        var current = value as string ?? string.Empty;
+        var target = parameter as string ?? string.Empty;
+        return string.Equals(current, target, StringComparison.OrdinalIgnoreCase)
+            ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x1D, 0x4E, 0xD8)) // 深蓝文字
+            : new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x33, 0x41, 0x55)); // 灰暗文字
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+}
+
 /// <summary>视频指示颜色（视频 紫色，图片 灰色/蓝色）</summary>
 public class BoolToVideoBrushConverter : IValueConverter
 {

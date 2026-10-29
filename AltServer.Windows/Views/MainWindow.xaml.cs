@@ -358,6 +358,70 @@ public partial class MainWindow : Window
 
     // MARK: - 投屏与照片（v1.0.87）
 
+    // MARK: - 仿爱思助手导航与视图切换
+
+    private void UpdateViewVisibility(string nav)
+    {
+        ViewModel.CurrentNavView = nav;
+
+        ViewDeviceInfo.Visibility = nav == "device_info" ? Visibility.Visible : Visibility.Collapsed;
+        ViewApps.Visibility = nav == "apps" ? Visibility.Visible : Visibility.Collapsed;
+        ViewSignInstall.Visibility = nav == "sign_install" ? Visibility.Visible : Visibility.Collapsed;
+        ViewLogs.Visibility = nav == "logs" ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnNavToDeviceInfo(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        UpdateViewVisibility("device_info");
+        _ = ViewModel.RefreshSelectedDeviceDetailAsync();
+    }
+
+    private void OnNavToPhotos(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        ViewModel.OpenPhotosWindow();
+    }
+
+    private void OnNavToApps(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        UpdateViewVisibility("apps");
+        ViewModel.LoadDeviceApp();
+    }
+
+    private void OnNavToMirror(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        ViewModel.OpenMirrorWindow();
+    }
+
+    private void OnNavToFiles(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        ViewModel.OpenFileSystemWindow();
+    }
+
+    private void OnNavToSignInstall(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        UpdateViewVisibility("sign_install");
+    }
+
+    private void OnNavToLogs(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        UpdateViewVisibility("logs");
+    }
+
+    private void OnRefreshDeviceInfo(object sender, RoutedEventArgs e)
+    {
+        _ = ViewModel.RefreshSelectedDeviceDetailAsync();
+    }
+
+    private void OnRefreshApps(object sender, RoutedEventArgs e)
+    {
+        ViewModel.LoadDeviceApp();
+    }
+
+    private void OnJumpToSignInstall(object sender, RoutedEventArgs e)
+    {
+        UpdateViewVisibility("sign_install");
+    }
+
     private void OnMirrorPreview(object sender, RoutedEventArgs e)
     {
         ViewModel.OpenMirrorWindow();

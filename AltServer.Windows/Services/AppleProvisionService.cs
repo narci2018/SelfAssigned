@@ -123,30 +123,26 @@ public class AppleProvisionService
             if (string.IsNullOrEmpty(_adsId))
                 throw new InvalidOperationException("未获取到开发者团队 ID，请重新登录");
 
-            // 1. 获取团队列表 (优先使用真正的 teamId)
-            try
-            {
-                Progress?.Invoke("获取开发者团队信息...");
-                var teams = await GetTeamsAsync();
-                if (teams.Count > 0 && !string.IsNullOrEmpty(teams[0].TeamId))
-                {
-                    _teamId = teams[0].TeamId;
-                    result.TeamId = _teamId;
-                    result.TeamName = teams[0].TeamName;
-                    LogService.Info($"[Provision] 开发者团队: {result.TeamName} ({_teamId})");
-                }
-            }
-            catch (Exception ex)
-            {
-                LogService.Warning($"[Provision] 获取团队列表提示: {ex.Message}，尝试使用默认 ID");
-            }
+            // 没有 com.apple.gs.xcode.auth 令牌，developerservices2 的每一个接口都会
+            // 回 resultCode 1100 "Your session has expired"。以前代码会带着一个伪造的
+            // base64(adsid:GsIdmsToken) 继续往下跑，把真实故障点掩盖成"会话过期"。
+            if (string.IsNullOrEmpty(_gsa.AuthToken))
+                throw new AppleAuthException(
+                    "缺少 Xcode 开发者令牌 (com.apple.gs.xcode.auth)，无法访问开发者服务。" +
+                    (string.IsNullOrEmpty(_gsa.LastAppTokenError) ? "" : $" 苹果返回: {_gsa.LastAppTokenError}"));
 
-            if (string.IsNullOrEmpty(_teamId))
-            {
-                _teamId = _adsId;
-                result.TeamId = _adsId;
-                result.TeamName = $"Apple Developer ({_adsId})";
-            }
+            // 1. 获取团队列表（必须拿到真实 teamId，绝不能拿 adsid 冒充）
+            Progress?.Invoke("获取开发者团队信息...");
+            var teams = await GetTeamsAsync();
+            if (teams.Count == 0 || string.IsNullOrEmpty(teams[0].TeamId))
+                throw new AppleAuthException(
+                    "苹果开发者服务未返回任何团队 (listTeams 为空)。" +
+                    "该 Apple ID 可能尚未加入免费开发者计划，请先用其在 Xcode 或 developer.apple.com 完成一次注册/条款同意。");
+
+            _teamId = teams[0].TeamId;
+            result.TeamId = _teamId;
+            result.TeamName = teams[0].TeamName;
+            LogService.Info($"[Provision] 开发者团队: {result.TeamName} ({_teamId})");
 
             // 2. 注册设备
             Progress?.Invoke($"注册设备 {deviceName}...");
@@ -811,7 +807,15 @@ public class AppleProvisionService
                 var resultString = dict.TryGetValue("resultString", out var r) ? r?.ToString() : null;
                 var errorMsg = !string.IsNullOrEmpty(userString) ? userString :
                                !string.IsNullOrEmpty(resultString) ? resultString : $"ResultCode {rc}";
-                throw new AppleAuthException($"开发者服务返回错误 ({rc}): {errorMsg}");
+
+                // 1100 从来不是"登录过期"，它只意味着请求里缺少有效的 Xcode 令牌。
+                var hint = rc switch
+                {
+                    1100 => "（根因：本次请求没有携带有效的 com.apple.gs.xcode.auth 令牌，" +
+                            "并非 Apple ID 登录过期。请查看日志中 [GSA] apptokens 的失败原因。）",
+                    _ => ""
+                };
+                throw new AppleAuthException($"开发者服务返回错误 ({rc}): {errorMsg}{hint}");
             }
         }
 
@@ -833,15 +837,17 @@ public class AppleProvisionService
             request.Headers.TryAddWithoutValidation("X-Apple-I-Identity-Id", adsId);
 
         // 3. Grandslam Xcode Token / Identity Token
-        var authToken = !string.IsNullOrEmpty(_gsa.AuthToken)
-            ? _gsa.AuthToken
-            : (!string.IsNullOrEmpty(adsId) && !string.IsNullOrEmpty(_gsIdmsToken)
-                ? Convert.ToBase64String(Encoding.UTF8.GetBytes($"{adsId}:{_gsIdmsToken}"))
-                : null);
+        //    只接受 apptokens 下发的真令牌；不要再用 base64(adsid:GsIdmsToken) 顶替，
+        //    那个格式 Apple 从不认，只会得到 resultCode 1100。
+        var authToken = _gsa.AuthToken;
         if (!string.IsNullOrEmpty(authToken))
         {
             request.Headers.TryAddWithoutValidation("X-Apple-GS-Token", authToken);
             request.Headers.TryAddWithoutValidation("X-Apple-Identity-Token", authToken);
+        }
+        else
+        {
+            LogService.Warning("[Provision] 缺少 X-Apple-GS-Token，本次开发者服务请求必定返回 1100");
         }
 
         // 4. Anisette 硬件/环境特征头

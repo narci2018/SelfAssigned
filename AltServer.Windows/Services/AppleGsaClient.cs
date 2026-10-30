@@ -38,6 +38,7 @@ public class AppleGsaClient : IDisposable
     private string _gsIdmsToken = string.Empty;
     private byte[] _sessionKey = Array.Empty<byte>();
     private byte[] _sessionCookie = Array.Empty<byte>();
+    private string _lastRawResponse = string.Empty;
 
     // SRP state for 2FA flow
     private byte[] _srpSalt = Array.Empty<byte>();
@@ -56,15 +57,19 @@ public class AppleGsaClient : IDisposable
     public string? AuthToken { get; private set; }
     public AnisetteData? Anisette => _anisette;
 
+    /// <summary>
+    /// apptokens 失败时 Apple 返回的原始诊断（hsc/ec/em/ed）。
+    /// 界面必须把它显示出来，而不是继续往下跑出 1100。
+    /// </summary>
+    public string LastAppTokenError { get; private set; } = string.Empty;
+
     private const string GS_ENDPOINT = "https://gsa.apple.com/grandslam/GsService2";
-    private const string GS_USER_AGENT = "iCloud.exe (unknown version) CFNetwork/520.46";
+    // 2026-10-21 首次成功签发证书时用的就是这个 UA；v1.0.97 曾把它换成
+    // "iCloud.exe (unknown version) CFNetwork/520.46"，没有任何证据支持，已回退。
+    private const string GS_USER_AGENT = "akd/1.0 CFNetwork/978.0.7 Darwin/18.7.0";
     private const string PLIST_PROLOG = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n";
     private const string DefaultClientInfo =
         "<PC> <Windows;10.0.26100> <com.apple.AuthKitWin/1 (com.apple.iTunes/12.13.7)>";
-    private const string MacClientInfo =
-        "<MacBookPro18,1> <macOS;14.4;23E214> <com.apple.AuthKit/1 (com.apple.akd/1.0)>";
-    private const string MacUserAgent =
-        "akd/1.0 CFNetwork/1494.0.7 Darwin/23.4.0";
 
     // Remote Anisette servers (tried in order) when CoreADI.dll is unavailable.
     private static readonly string[] AnisetteUrls = new[]
@@ -249,11 +254,15 @@ public class AppleGsaClient : IDisposable
                 return AuthResult.Success;
             }
 
-            // Fallback: 如果 apptokens 未取到，以 adsid:GsIdmsToken 作为凭据
-            AuthToken = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{_adsId}:{_gsIdmsToken}"));
-            IsAuthenticated = true;
-            LogService.Info("[GSA] 认证成功 (密码已通过, 使用 GSA 身份令牌)");
-            return AuthResult.Success;
+            // 没有 com.apple.gs.xcode.auth 令牌就没有任何可用的开发者会话。
+            // 以前这里会伪造一个 base64(adsid:GsIdmsToken) 塞进 X-Apple-GS-Token，
+            // Apple 从不接受该格式，只会让后面每个接口回 resultCode 1100，
+            // 把真正的失败点（apptokens）藏起来。现在直接如实报错。
+            IsAuthenticated = false;
+            LogService.Error($"[GSA] 密码校验通过，但 Apple 拒绝签发 Xcode 令牌: {LastAppTokenError}");
+            return AuthResult.Error(
+                $"Apple ID 与密码校验已通过（SRP 认证成功），但苹果拒绝签发 Xcode 开发者令牌。\n" +
+                $"苹果返回: {LastAppTokenError}");
         }
         catch (TaskCanceledException)
         {
@@ -357,9 +366,10 @@ public class AppleGsaClient : IDisposable
                 ["u"] = _srpAppleId,
                 ["o"] = "complete"
             };
-            var completeResult = await GsRequest(completeParams, await GetAnisetteAsync());
+            var completeAnisette = await GetAnisetteAsync() ?? freshAnisette;
+            var completeResult = await GsRequest(completeParams, completeAnisette);
             if (completeResult == null)
-                return AuthResult.Error("SRP Complete 失败");
+                return AuthResult.Error("SRP Complete 失败 - 无法与 Apple 服务器完成会话建立");
 
             var compHsc = GetInt(completeResult, "hsc", 0);
             var compEc = GetInt(completeResult, "ec", -1);
@@ -393,19 +403,22 @@ public class AppleGsaClient : IDisposable
                 return AuthResult.Error("无法从服务器响应提取令牌");
 
             // ---------- apptokens ----------
-            var appToken = await FetchAppTokenAsync(salt, _srpPassword, publicA, serverB, _srpAppleId, iterations, s2kFo, await GetAnisetteAsync() ?? new AnisetteData());
+            var tokenAnisette = await GetAnisetteAsync() ?? freshAnisette;
+            var appToken = await FetchAppTokenAsync(salt, _srpPassword, publicA, serverB, _srpAppleId, iterations, s2kFo, tokenAnisette);
             if (appToken != null)
             {
                 AuthToken = appToken;
-            }
-            else
-            {
-                AuthToken = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{_adsId}:{_gsIdmsToken}"));
+                IsAuthenticated = true;
+                LogService.Info("[GSA] 2FA 认证成功");
+                return AuthResult.Success;
             }
 
-            IsAuthenticated = true;
-            LogService.Info("[GSA] 2FA 认证成功");
-            return AuthResult.Success;
+            // 同上：不伪造令牌，如实报错。
+            IsAuthenticated = false;
+            LogService.Error($"[GSA] 2FA 通过，但 Apple 拒绝签发 Xcode 令牌: {LastAppTokenError}");
+            return AuthResult.Error(
+                $"Apple ID 与双重认证均已通过，但苹果拒绝签发 Xcode 开发者令牌。\n" +
+                $"苹果返回: {LastAppTokenError}");
         }
         catch (Exception ex)
         {
@@ -434,114 +447,185 @@ public class AppleGsaClient : IDisposable
         }
     }
 
+    /// <summary>
+    /// 请求 com.apple.gs.xcode.auth 应用级令牌（Xcode 开发者服务的唯一有效凭据）。
+    /// 没有它，developerservices2.apple.com 的所有接口都会回 resultCode 1100。
+    /// </summary>
     private async Task<string?> FetchAppTokenAsync(byte[] salt, string password, byte[] publicA,
         byte[] serverB, string appleId, int iterations, bool s2kFo, AnisetteData anisette)
     {
         const string app = "com.apple.gs.xcode.auth";
+
+        // 每次尝试都用一份全新的 anisette：调用方传进来的那份已经在 SRP complete
+        // 时用过一次，重复使用会让 Apple 认为是重放。
+        for (int attempt = 1; attempt <= 3; attempt++)
+        {
+            try
+            {
+                var ans = attempt == 1 ? anisette : (await GetAnisetteAsync() ?? anisette);
+
+                LogService.Info($"[GSA] apptokens 尝试 {attempt}/3  adsId: {_adsId}  app: {app}");
+                LogService.Info($"[GSA] apptokens gsIdmsToken: {(_gsIdmsToken.Length > 24 ? _gsIdmsToken[..24] + "..." : _gsIdmsToken)}");
+
+                var checksum = AppleSrp.MakeChecksum(_sessionKey, _adsId, app);
+                var paramsDict = new Dictionary<string, object>
+                {
+                    ["app"] = new object[] { app },
+                    ["c"] = _sessionCookie,
+                    ["checksum"] = checksum,
+                    ["o"] = "apptokens",
+                    ["t"] = _gsIdmsToken,
+                    ["u"] = _adsId
+                };
+
+                var result = await GsRequest(paramsDict, ans);
+                if (result == null)
+                {
+                    LastAppTokenError = "apptokens 请求失败 - 无法连接 Apple 服务器";
+                    LogService.Error($"[GSA] {LastAppTokenError} (尝试 {attempt}/3)");
+                }
+                else
+                {
+                    LogService.Info($"[GSA] apptokens 响应 keys: {string.Join(", ", result.Keys)}");
+                    LogService.Info($"[GSA] apptokens hsc={GetInt(result, "hsc", 0)} ec={GetInt(result, "ec", -1)}");
+
+                    var et = GetData(result, "et");
+                    LogService.Info($"[GSA] apptokens et length: {et?.Length ?? 0}");
+
+                    if (et != null && et.Length >= 35)
+                    {
+                        var token = await Task.Run(() => DecryptAppToken(et));
+                        if (!string.IsNullOrEmpty(token)) return token;
+                    }
+                    else
+                    {
+                        LastAppTokenError = DescribeGsError(result);
+                        LogService.Warning($"[GSA] apptokens 未取得令牌 (尝试 {attempt}/3): {LastAppTokenError}");
+                        LogService.Info($"[GSA] apptokens 原始响应: {Truncate(_lastRawResponse, 1200)}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LastAppTokenError = $"apptokens 异常: {ex.Message}";
+                LogService.Error($"[GSA] {LastAppTokenError}");
+            }
+
+            if (attempt < 3) await Task.Delay(1200 * attempt);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// 把 Apple 的 Status 块翻成人话。ed 是 Apple 额外给出的诊断数据，
+    /// 之前被整个丢弃，导致界面上只能看到一句笼统的 "This action cannot be completed"。
+    /// </summary>
+    private static string DescribeGsError(Dictionary<string, string> status)
+    {
+        var hsc = GetInt(status, "hsc", 0);
+        var ec = GetInt(status, "ec", -1);
+        var em = GetString(status, "em", "");
+        var au = GetString(status, "au", "");
+
+        var sb = new StringBuilder($"hsc={hsc} ec={ec}");
+        if (!string.IsNullOrEmpty(em)) sb.Append("  em=").Append(em);
+        if (!string.IsNullOrEmpty(au)) sb.Append("  au=").Append(au);
+
+        if (status.TryGetValue("ed", out var ed) && !string.IsNullOrEmpty(ed))
+        {
+            sb.Append("  ed=").Append(DecodeEd(ed));
+        }
+
+        return sb.ToString();
+    }
+
+    private static string DecodeEd(string ed)
+    {
         try
         {
-            LogService.Info($"[GSA] apptokens adsId: {_adsId}");
-            LogService.Info($"[GSA] apptokens app: {app}");
-            LogService.Info($"[GSA] apptokens gsIdmsToken: {(_gsIdmsToken.Length > 24 ? _gsIdmsToken[..24] + "..." : _gsIdmsToken)}");
-            var paramsDict = new Dictionary<string, object>
+            var bytes = Convert.FromBase64String(ed.Trim());
+            var text = Encoding.UTF8.GetString(bytes);
+            var printable = text.Count(c => c >= 32 && c < 127) >= Math.Max(1, text.Length * 3 / 4);
+            if (printable)
             {
-                ["app"] = new object[] { app },
-                ["c"] = _sessionCookie,
-                ["o"] = "apptokens",
-                ["t"] = _gsIdmsToken,
-                ["u"] = _adsId
-            };
-
-            var result = await GsRequest(paramsDict, anisette);
-            if (result == null)
-            {
-                LogService.Error("[GSA] apptokens 请求失败");
-                return null;
+                var trimmed = text.Replace("\0", "").Trim();
+                if (trimmed.Length > 0) return trimmed.Length > 300 ? trimmed[..300] : trimmed;
             }
-
-            LogService.Info($"[GSA] apptokens 响应 keys: {string.Join(", ", result.Keys)}");
-            LogService.Info($"[GSA] apptokens hsc={GetInt(result, "hsc", 0)} ec={GetInt(result, "ec", -1)}");
-
-            // 尝试从 Response dict 中提取（某些服务器返回嵌套结构）
-            if (result.TryGetValue("Response", out var responseVal))
-            {
-                LogService.Info($"[GSA] apptokens 有 Response 包装，尝试解析...");
-            }
-
-            var et = GetData(result, "et");
-            LogService.Info($"[GSA] apptokens et length: {et?.Length ?? 0}");
-            LogService.Info($"[GSA] apptokens et hex (first 64): {(et != null ? BitConverter.ToString(et[..Math.Min(64, et.Length)]) : "null")}");
-            if (et == null || et.Length < 35)
-            {
-                LogService.Warning($"[GSA] apptokens 无 et 或太短: hsc={GetInt(result, "hsc", 0)} ec={GetInt(result, "ec", -1)} em={GetString(result, "em", "")}");
-                return null;
-            }
-
-            // 1. 优先使用 asrp64.dll (爱思助手原生 Apple GCM 解密组件)
-            var plain = DecryptWithAsrp(_sessionKey, et);
-
-            // 2. 如果 asrp64.dll 不可用，回退至 CNG / AesGcm
-            if (plain == null)
-            {
-                var magic = et[..3];  // "XYZ" or similar
-                var iv = et[3..19];   // 16 bytes IV
-                var ciphertextWithAuthTag = et[19..];  // Last 16 bytes are the GCM tag
-
-                var ciphertext = ciphertextWithAuthTag[..^16];
-                var authTag = ciphertextWithAuthTag[^16..];
-
-                LogService.Info($"[GSA] apptokens magic: {BitConverter.ToString(magic)}");
-                LogService.Info($"[GSA] apptokens iv length: {iv.Length}, ciphertext length: {ciphertext.Length}, tag length: {authTag.Length}");
-                plain = AesGcmDecrypt(_sessionKey, iv, ciphertext, authTag, magic);
-            }
-
-            if (plain == null)
-            {
-                LogService.Error($"[GSA] apptokens AES-GCM 解密失败 - keyLen={_sessionKey.Length}, etLen={et.Length}");
-                return null;
-            }
-
-            var tokensText = Encoding.UTF8.GetString(plain);
-            LogService.Info($"[GSA] apptokens 解密明文长度: {plain.Length} 字节");
-
-            // 提取 token: 支持 XML Plist / 字典键 / 正则
-            string? token = ExtractXml(tokensText, "token");
-            if (string.IsNullOrEmpty(token))
-            {
-                var match = System.Text.RegularExpressions.Regex.Match(tokensText, @"<key>token</key>\s*<string>([^<]+)</string>");
-                if (match.Success)
-                    token = match.Groups[1].Value.Trim();
-            }
-
-            if (string.IsNullOrEmpty(token))
-            {
-                var parsed = ParseApplePlist(tokensText);
-                if (parsed != null && parsed.TryGetValue("token", out var tVal))
-                    token = tVal;
-            }
-
-            if (string.IsNullOrEmpty(token))
-            {
-                // 正则捕获 Apple GS Token 特征的 Base64 串
-                var m = System.Text.RegularExpressions.Regex.Match(tokensText, @"([A-Za-z0-9+/=]{80,})");
-                if (m.Success)
-                    token = m.Groups[1].Value.Trim();
-            }
-
-            if (!string.IsNullOrEmpty(token))
-            {
-                LogService.Info($"[GSA] apptokens 获取成功: tokenLen={token.Length}");
-                return token;
-            }
-
-            LogService.Warning($"[GSA] apptokens 响应未含 token: {tokensText[..Math.Min(200, tokensText.Length)]}");
-            return null;
+            return $"[{bytes.Length}B hex: {BitConverter.ToString(bytes, 0, Math.Min(64, bytes.Length))}...]";
         }
-        catch (Exception ex)
+        catch
         {
-            LogService.Error($"[GSA] apptokens 异常: {ex.Message}");
+            return ed.Length > 200 ? ed[..200] + "..." : ed;
+        }
+    }
+
+    /// <summary>解密 apptokens 响应里的 et，取出 token 字段。</summary>
+    private string? DecryptAppToken(byte[] et)
+    {
+        LogService.Info($"[GSA] apptokens et hex (first 64): {BitConverter.ToString(et[..Math.Min(64, et.Length)])}");
+
+        // 1. 优先使用 asrp64.dll (爱思助手原生 Apple GCM 解密组件)
+        var plain = DecryptWithAsrp(_sessionKey, et);
+
+        // 2. 如果 asrp64.dll 不可用，回退至 CNG / AesGcm
+        if (plain == null)
+        {
+            var magic = et[..3];  // "XYZ" or similar
+            var iv = et[3..19];   // 16 bytes IV
+            var ciphertextWithAuthTag = et[19..];  // Last 16 bytes are the GCM tag
+
+            var ciphertext = ciphertextWithAuthTag[..^16];
+            var authTag = ciphertextWithAuthTag[^16..];
+
+            LogService.Info($"[GSA] apptokens magic: {BitConverter.ToString(magic)}");
+            LogService.Info($"[GSA] apptokens iv length: {iv.Length}, ciphertext length: {ciphertext.Length}, tag length: {authTag.Length}");
+            plain = AesGcmDecrypt(_sessionKey, iv, ciphertext, authTag, magic);
+        }
+
+        if (plain == null)
+        {
+            LastAppTokenError = $"et 解密失败 (keyLen={_sessionKey.Length}, etLen={et.Length})";
+            LogService.Error($"[GSA] {LastAppTokenError}");
             return null;
         }
+
+        var tokensText = Encoding.UTF8.GetString(plain);
+        LogService.Info($"[GSA] apptokens 解密明文长度: {plain.Length} 字节");
+
+        // 提取 token: 支持 XML Plist / 字典键 / 正则
+        string? token = ExtractXml(tokensText, "token");
+        if (string.IsNullOrEmpty(token))
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(tokensText, @"<key>token</key>\s*<string>([^<]+)</string>");
+            if (match.Success)
+                token = match.Groups[1].Value.Trim();
+        }
+
+        if (string.IsNullOrEmpty(token))
+        {
+            var parsed = ParseApplePlist(tokensText);
+            if (parsed != null && parsed.TryGetValue("token", out var tVal))
+                token = tVal;
+        }
+
+        if (string.IsNullOrEmpty(token))
+        {
+            // 正则捕获 Apple GS Token 特征的 Base64 串
+            var m = System.Text.RegularExpressions.Regex.Match(tokensText, @"([A-Za-z0-9+/=]{80,})");
+            if (m.Success)
+                token = m.Groups[1].Value.Trim();
+        }
+
+        if (!string.IsNullOrEmpty(token))
+        {
+            LogService.Info($"[GSA] apptokens 获取成功: tokenLen={token.Length}");
+            return token;
+        }
+
+        LastAppTokenError = $"apptokens 响应未含 token: {tokensText[..Math.Min(200, tokensText.Length)]}";
+        LogService.Warning($"[GSA] {LastAppTokenError}");
+        return null;
     }
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
@@ -980,6 +1064,8 @@ public class AppleGsaClient : IDisposable
         };
         request.Headers.TryAddWithoutValidation("User-Agent", GS_USER_AGENT);
         request.Headers.TryAddWithoutValidation("Accept", "*/*");
+        request.Headers.TryAddWithoutValidation("X-MMe-Client-Info", DefaultClientInfo);
+        request.Headers.TryAddWithoutValidation("X-Apple-Client-App-Name", "akd");
         request.Headers.TryAddWithoutValidation("Connection", "close");
 
         // GrandSlam validates that the anisette values are present as HTTP headers too
@@ -991,6 +1077,7 @@ public class AppleGsaClient : IDisposable
         LogService.Info($"[SRP] 响应: {response.StatusCode}");
 
         var responseBody = await response.Content.ReadAsStringAsync();
+        _lastRawResponse = responseBody;
         LogService.Info($"[SRP] 响应体长度: {responseBody.Length}");
 
         if (!response.IsSuccessStatusCode)

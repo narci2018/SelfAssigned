@@ -121,7 +121,17 @@ public static class CoreADIService
             var (gr, grRet) = Call(dispatch, MagicGetIdmsRouting, gim);
             long routing = 17106176L;
             if (grRet == 0 && GetI32(gr, 0) == 0)
+            {
                 routing = Marshal.ReadInt64(rSlot);
+            }
+            else
+            {
+                // 静默回退到硬编码 RINFO 会让 anisette 的"产品线"标识与本机的真实值不一致。
+                // v1.0.89 拿到的是本机真实值 33883392，v1.0.97 起这里失败并悄悄用了 17106176。
+                LogService.Warning(
+                    $"[Anisette] CoreADI GetIDMSRouting 失败 (ret=0x{grRet:X8}, status={GetI32(gr, 0)})，" +
+                    $"回退 RINFO=17106176；本机真实路由值取不到，可能与苹果侧的产品线校验不一致。");
+            }
 
             // RequestOTP(-2): msg = [i64 ds_id][u64 midPtr][u64 midLenPtr][u64 otpPtr][u64 otpLenPtr]
             var midPtr = Marshal.AllocHGlobal(1024);

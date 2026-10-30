@@ -176,7 +176,9 @@ public partial class AppleSetupDialog : Window
 
             if (authResult.Status == AuthStatus.Error)
             {
-                ShowError($"{authResult.Message}\n请检查：\n1. Apple ID 与密码是否正确\n2. 网络连接是否畅通");
+                // authResult.Message 里已经带上 Apple 的原始返回；不要再笼统地
+                // 让用户去怀疑自己输对了密码。
+                ShowError(authResult.Message);
                 return;
             }
 
@@ -272,15 +274,10 @@ public partial class AppleSetupDialog : Window
                 }
                 else
                 {
-                    LogService.Warning($"[Setup] 自动配置提示: {provResult.ErrorMessage}");
-                    if (provResult.ErrorMessage?.Contains("1100") == true)
-                    {
-                        ShowError("Apple ID 账号验证已通过，但开发者服务返回 1100 (会话未授权)。\n这通常是苹果对免费账号下发 Xcode 证书的临时风控限制。\n建议方案：\n1. 在「自签名与安装」页面直接导入已有 P12 证书与描述文件进行安装；\n2. 或稍后重试申请。");
-                    }
-                    else
-                    {
-                        ShowError($"自动签名配置失败: {provResult.ErrorMessage}");
-                    }
+                    LogService.Warning($"[Setup] 自动配置失败: {provResult.ErrorMessage}");
+                    ShowError($"自动签名配置未完成。\n苹果返回: {provResult.ErrorMessage}\n\n" +
+                              "运行日志（菜单「运行日志」）里有 [GSA] apptokens 一行的完整错误码，" +
+                              "那才是本次失败的真正原因。");
                     return;
                 }
             }

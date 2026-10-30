@@ -263,6 +263,21 @@ public class AnisetteData
     public string TimeZone { get; set; } = "UTC";
     public string ClientTime { get; set; } = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
 
+    /// <summary>anisette 来源（远程 Mac 服务器地址或本机 CoreADI），只用于日志与身份一致性判断。</summary>
+    public string Provider { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 生成这份 anisette 的那个客户端所使用的 User-Agent。
+    /// GrandSlam 会校验 UA / X-MMe-Client-Info 与 anisette 是否同源，不匹配直接拒。
+    /// anisette v3 服务器在 /v3/client_info 里报告它（Mac 站点为 akd/1.0 CFNetwork/811.5.4 Darwin/16.7.0）。
+    /// </summary>
+    public string UserAgent { get; set; } = string.Empty;
+
+    /// <summary>这份 anisette 是不是 macOS 身份。UA / Client-Info / cpd 必须与它一致。</summary>
+    public bool IsMacIdentity =>
+        ClientInfo.StartsWith("<Mac", StringComparison.OrdinalIgnoreCase) ||
+        ClientInfo.Contains("Mac OS X", StringComparison.OrdinalIgnoreCase);
+
     public Dictionary<string, string> ToHeaders()
     {
         return new Dictionary<string, string>
@@ -280,24 +295,25 @@ public class AnisetteData
         };
     }
 
+    /// <summary>
+    /// cpd（client provisioning data）。形状对齐 AltSign 官方 2026-10 修复版
+    /// （rileytestut/AltSign#61 的 makeClientDictionary）：只带这些键，
+    /// 布尔值以字符串下发。之前多带的 capp / ckgen / X-Apple-I-MD-LU / SRL-NO /
+    /// X-MMe-Client-Info 会让 cpd 与「生成这份 anisette 的客户端」对不上。
+    /// HTTP 头仍然带全量 anisette 字段，两者互不冲突。
+    /// </summary>
     public Dictionary<string, object> ToCpd()
     {
         return new Dictionary<string, object>
         {
-            ["bootstrap"] = true,
-            ["capp"] = "akd",
-            ["ckgen"] = true,
-            ["icscrec"] = true,
-            ["loc"] = Locale,
-            ["pbe"] = false,
-            ["prkgen"] = true,
+            ["bootstrap"] = "true",
+            ["icscrec"] = "true",
+            ["pbe"] = "false",
+            ["prkgen"] = "true",
             ["svct"] = "iCloud",
-            ["X-Apple-I-Client-Time"] = ClientTime,
-            ["X-Apple-I-TimeZone"] = TimeZone,
-            ["X-Apple-Locale"] = Locale,
+            ["loc"] = "en_US",
             ["X-Apple-I-MD"] = OneTimePassword,
             ["X-Apple-I-MD-M"] = MachineId,
-            ["X-Apple-I-MD-RINFO"] = RoutingInfo.ToString(),
             ["X-Mme-Device-Id"] = DeviceUniqueId,
         };
     }

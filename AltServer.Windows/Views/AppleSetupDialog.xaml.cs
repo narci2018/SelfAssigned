@@ -117,6 +117,7 @@ public partial class AppleSetupDialog : Window
 
                 if (result.Status == AuthStatus.Error)
                 {
+                    if (_gsaClient?.AdsId != null) SaveCredentials();
                     ShowError(result.Message ?? "双重认证验证码错误，请重试");
                     return;
                 }
@@ -125,6 +126,7 @@ public partial class AppleSetupDialog : Window
                 StatusText.Foreground = new System.Windows.Media.SolidColorBrush(
                     System.Windows.Media.Color.FromRgb(0x16, 0xA3, 0x4A));
                 LogService.Info("[Setup] 双重认证成功，继续后续配置");
+                SaveCredentials();
 
                 await Task.Delay(500);
                 await HandlePostLoginAsync();
@@ -178,6 +180,10 @@ public partial class AppleSetupDialog : Window
             {
                 // authResult.Message 里已经带上 Apple 的原始返回；不要再笼统地
                 // 让用户去怀疑自己输对了密码。
+                // AdsId 非空 = spd 已成功解密 = 密码确实是对的，只是后面换 Xcode
+                // 令牌那一步被苹果拒了。这种情况下照样落盘，勾选的「记住密码」
+                // 才不会因为一次令牌失败而丢失。
+                if (_gsaClient?.AdsId != null) SaveCredentials();
                 ShowError(authResult.Message);
                 return;
             }
@@ -199,6 +205,7 @@ public partial class AppleSetupDialog : Window
 
             // 登录成功，直接进入自动签名配置
             LogService.Info("[Setup] Apple ID 认证成功，进入自动配置");
+            SaveCredentials();
             await HandlePostLoginAsync();
         }
         catch (Exception ex)
@@ -249,7 +256,8 @@ public partial class AppleSetupDialog : Window
                     ResultAppleId = _appleId;
 
                     // 多账号管理（v1.0.86）：登记/更新账号，记住密码（DPAPI 加密），绑定设备
-                    settings.Data.AnisetteUrl = AnisetteUrlBox.Text.Trim();
+                    var typedUrl = AnisetteUrlBox.Text.Trim();
+                    if (!string.IsNullOrEmpty(typedUrl)) settings.Data.AnisetteUrl = typedUrl;
                     var account = settings.Data.GetOrCreateAccount(_appleId);
                     account.TeamId = provResult.TeamId;
                     account.LastLoginUtc = DateTime.UtcNow;
@@ -291,6 +299,33 @@ public partial class AppleSetupDialog : Window
         {
             LogService.Error($"[Setup] 自动配置异常: {ex}");
             ShowError($"自动配置异常: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Apple ID 会话一旦建立就立刻落盘账号、Anisette 地址和勾选的密码。
+    /// 以前只有整条自动配置全部跑完才 settings.Save()，apptokens 一失败连密码一起丢，
+    /// 「记住密码」形同虚设，描述文件到期时也没有可用凭据做自动续期。
+    /// </summary>
+    private void SaveCredentials()
+    {
+        if (string.IsNullOrEmpty(_appleId)) return;
+        try
+        {
+            var settings = new SettingsService();
+            // 留空表示“用内置的 Mac Anisette 服务器”，不要把已保存的自定义地址抹掉
+            var typedUrl = AnisetteUrlBox.Text.Trim();
+            if (!string.IsNullOrEmpty(typedUrl)) settings.Data.AnisetteUrl = typedUrl;
+            var account = settings.Data.GetOrCreateAccount(_appleId);
+            if (_rememberPassword && !string.IsNullOrEmpty(_password))
+                account.SetPassword(_password);
+            account.LastLoginUtc = DateTime.UtcNow;
+            settings.Save();
+            LogService.Info($"[Setup] 账号 {_appleId} 已保存（记住密码: {_rememberPassword}），后续可自动续期");
+        }
+        catch (Exception ex)
+        {
+            LogService.Error($"[Setup] 保存账号凭据失败: {ex.Message}");
         }
     }
 

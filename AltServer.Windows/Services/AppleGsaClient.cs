@@ -39,6 +39,8 @@ public class AppleGsaClient : IDisposable
     private byte[] _sessionKey = Array.Empty<byte>();
     private byte[] _sessionCookie = Array.Empty<byte>();
     private string _lastRawResponse = string.Empty;
+    // 本次认证会话锁定的 anisette 来源（远程 URL 或 LocalAnisetteSource）
+    private string _pinnedAnisetteSource = string.Empty;
 
     // SRP state for 2FA flow
     private byte[] _srpSalt = Array.Empty<byte>();
@@ -63,17 +65,42 @@ public class AppleGsaClient : IDisposable
     /// </summary>
     public string LastAppTokenError { get; private set; } = string.Empty;
 
+    /// <summary>
+    /// -80046 自 2026-10-21 起是「苹果拒收该身份的 anisette」的固定表现，
+    /// 不是账号风控，也不是密码问题，给出可执行的下一步。
+    /// </summary>
+    private string AppTokenHint(string raw)
+        => raw.Contains("-80046")
+            ? $"\n原因: 苹果自 2026-10-21 起拒收 Windows(iTunes/CoreADI) anisette 签发的 Xcode 令牌，" +
+              $"本次使用的身份来源是 {_anisette?.Provider}。" +
+              $"\n请在「高级选项」里填一个可用的 Mac Anisette 地址（默认已内置 mac-ani.jkcoxson.com 等）后重试。"
+            : string.Empty;
+
     private const string GS_ENDPOINT = "https://gsa.apple.com/grandslam/GsService2";
-    // 2026-10-21 首次成功签发证书时用的就是这个 UA；v1.0.97 曾把它换成
-    // "iCloud.exe (unknown version) CFNetwork/520.46"，没有任何证据支持，已回退。
-    private const string GS_USER_AGENT = "akd/1.0 CFNetwork/978.0.7 Darwin/18.7.0";
+
+    // 客户端身份必须与 anisette 的来源成套，否则苹果在 apptokens 这一步直接拒。
+    // Mac 身份取自 omnisette v3 服务器返回的 X-MMe-Client-Info：
+    //   <MacBookPro13,3> <Mac OS X;10.12.6;16G29> <com.apple.AuthKit/1 (com.apple.akd/1.0)>
+    // 对应 Darwin 16.7.0，因此 UA 用 CFNetwork/811.5.4（xtool#380 / iloader 同款组合）。
+    private const string MacUserAgent = "akd/1.0 CFNetwork/811.5.4 Darwin/16.7.0";
+    private const string WindowsUserAgent = "iCloud.exe (unknown version) CFNetwork/520.46";
+
     private const string PLIST_PROLOG = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n";
     private const string DefaultClientInfo =
         "<PC> <Windows;10.0.26100> <com.apple.AuthKitWin/1 (com.apple.iTunes/12.13.7)>";
 
-    // Remote Anisette servers (tried in order) when CoreADI.dll is unavailable.
+    // 2026-10-21 起，苹果拒绝用 Windows(iTunes/CoreADI) anisette 换取
+    // com.apple.gs.xcode.auth 令牌：SRP 全程 200，apptokens 回 hsc=400 ec=-80046
+    // "This action cannot be completed at this time."（本机 13 份日志 + AltStore#1840
+    // 同日期、同错误码可交叉印证）。xtool#380 与 iloader 的修法都是改用真实 macOS
+    // 的 anisette（omnisette v3），因此这里把 Mac 服务器排在最前，
+    // 本机 CoreADI.dll 降级为兜底（仅供 iCloud 侧接口，不再用于 xcode 令牌）。
     private static readonly string[] AnisetteUrls = new[]
     {
+        "https://mac-ani.jkcoxson.com",
+        "https://new.ani.sidestore.io",
+        "https://ani3.stikstore.app",
+        // 旧的 Windows/Android 站点，仅作最后兜底
         "https://ani.sidestore.io",
         "https://ani.stikstore.app",
         "https://ani.npeg.us",
@@ -110,6 +137,8 @@ public class AppleGsaClient : IDisposable
         try
         {
             LogService.Info($"[GSA] 开始认证: {appleId}");
+            _pinnedAnisetteSource = string.Empty;
+            LastAppTokenError = string.Empty;
             var sanitizedAppleId = appleId.Trim().ToLowerInvariant();
 
             LogService.Info("[GSA] 步骤1: 获取 Anisette 数据...");
@@ -119,7 +148,11 @@ public class AppleGsaClient : IDisposable
                 LogService.Error("[GSA] 无法获取 Anisette 数据");
                 return AuthResult.Error("无法获取 Anisette 数据。请检查网络连接或 CoreADI.dll 是否可用。");
             }
-            LogService.Info($"[GSA] Anisette 获取成功: RINFO={_anisette.RoutingInfo}, MID={_anisette.MachineId[..Math.Min(16, _anisette.MachineId.Length)]}...");
+            LogService.Info(
+                $"[GSA] Anisette 获取成功: 来源={_anisette.Provider} " +
+                $"身份={(_anisette.IsMacIdentity ? "macOS" : "Windows")} " +
+                $"RINFO={_anisette.RoutingInfo} " +
+                $"MID={_anisette.MachineId[..Math.Min(16, _anisette.MachineId.Length)]}...");
 
             // ---------- SRP init ----------
             LogService.Info("[GSA] 步骤2: SRP init...");
@@ -262,7 +295,7 @@ public class AppleGsaClient : IDisposable
             LogService.Error($"[GSA] 密码校验通过，但 Apple 拒绝签发 Xcode 令牌: {LastAppTokenError}");
             return AuthResult.Error(
                 $"Apple ID 与密码校验已通过（SRP 认证成功），但苹果拒绝签发 Xcode 开发者令牌。\n" +
-                $"苹果返回: {LastAppTokenError}");
+                $"苹果返回: {LastAppTokenError}" + AppTokenHint(LastAppTokenError));
         }
         catch (TaskCanceledException)
         {
@@ -298,7 +331,7 @@ public class AppleGsaClient : IDisposable
 
             var request = new HttpRequestMessage(HttpMethod.Get,
                 "https://gsa.apple.com/grandslam/GsService2/validate");
-            request.Headers.Add("User-Agent", GS_USER_AGENT);
+            request.Headers.Add("User-Agent", UserAgentFor(anisette));
             request.Headers.Add("Accept", "*/*");
             request.Headers.Add("security-code", code);
 
@@ -418,7 +451,7 @@ public class AppleGsaClient : IDisposable
             LogService.Error($"[GSA] 2FA 通过，但 Apple 拒绝签发 Xcode 令牌: {LastAppTokenError}");
             return AuthResult.Error(
                 $"Apple ID 与双重认证均已通过，但苹果拒绝签发 Xcode 开发者令牌。\n" +
-                $"苹果返回: {LastAppTokenError}");
+                $"苹果返回: {LastAppTokenError}" + AppTokenHint(LastAppTokenError));
         }
         catch (Exception ex)
         {
@@ -456,13 +489,24 @@ public class AppleGsaClient : IDisposable
     {
         const string app = "com.apple.gs.xcode.auth";
 
-        // 每次尝试都用一份全新的 anisette：调用方传进来的那份已经在 SRP complete
-        // 时用过一次，重复使用会让 Apple 认为是重放。
+        if (!anisette.IsMacIdentity)
+        {
+            LogService.Warning(
+                $"[GSA] apptokens 正以 Windows 身份({anisette.Provider}) 请求 Xcode 令牌。" +
+                "苹果自 2026-10-21 起对 Windows 身份普遍返回 ec=-80046，这一步大概率失败。");
+        }
+
+        // 每次尝试都用一份全新的 anisette：苹果拒绝重复使用过的 OTP，
+        // 调用方传进来的那份已经在 SRP complete 时用过一次。
         for (int attempt = 1; attempt <= 3; attempt++)
         {
             try
             {
-                var ans = attempt == 1 ? anisette : (await GetAnisetteAsync() ?? anisette);
+                var ans = attempt == 1
+                    ? anisette
+                    : await GetAnisetteAsync(allowLocalFallback: false)
+                      ?? await GetAnisetteAsync()
+                      ?? anisette;
 
                 LogService.Info($"[GSA] apptokens 尝试 {attempt}/3  adsId: {_adsId}  app: {app}");
                 LogService.Info($"[GSA] apptokens gsIdmsToken: {(_gsIdmsToken.Length > 24 ? _gsIdmsToken[..24] + "..." : _gsIdmsToken)}");
@@ -500,7 +544,18 @@ public class AppleGsaClient : IDisposable
                     else
                     {
                         LastAppTokenError = DescribeGsError(result);
-                        LogService.Warning($"[GSA] apptokens 未取得令牌 (尝试 {attempt}/3): {LastAppTokenError}");
+                        var hsc = GetInt(result, "hsc", 0);
+                        if (hsc == 434)
+                        {
+                            // 434 = anisette 与苹果侧记录不同步（官方做法是拿 X-Apple-I-MD-DATA
+                            // 去 resync provider）。这里等价处理：下一轮换一个新来源重取。
+                            LogService.Warning($"[GSA] apptokens hsc=434 anisette 不同步，换来源重试: {LastAppTokenError}");
+                            _pinnedAnisetteSource = string.Empty;
+                        }
+                        else
+                        {
+                            LogService.Warning($"[GSA] apptokens 未取得令牌 (尝试 {attempt}/3): {LastAppTokenError}");
+                        }
                         LogService.Info($"[GSA] apptokens 原始响应: {Truncate(_lastRawResponse, 1200)}");
                     }
                 }
@@ -898,21 +953,35 @@ public class AppleGsaClient : IDisposable
 
     // MARK: - Anisette
 
-    private async Task<AnisetteData?> GetAnisetteAsync()
-    {
-        // Method 0: bundled CoreADI.dll (Apple-valid, preferred)
-        var coreAdi = CoreADIService.TryFetchAnisette(_toolsDir);
-        if (coreAdi != null)
-        {
-            LogService.Info("[Anisette] CoreADI.dll 获取成功");
-            return coreAdi;
-        }
+    private const string LocalAnisetteSource = "local:CoreADI";
 
-        // Method 1: Remote Anisette server (v3/omnisette preferred, then v1 GET)
+    /// <summary>
+    /// 取一份 anisette。同一次认证会话内锁定同一个来源：
+    /// init 用 Mac 服务器、complete 却掉回本机 Windows CoreADI，会让苹果看到
+    /// 身份翻转（MID/设备号/Client-Info 互相矛盾），直接判定环境不一致。
+    /// </summary>
+    private async Task<AnisetteData?> GetAnisetteAsync(bool allowLocalFallback = true)
+    {
         var candidates = new List<string>();
         if (!string.IsNullOrEmpty(_anisetteUrl)) candidates.Add(_anisetteUrl);
         candidates.AddRange(AnisetteUrls);
 
+        // 已经选定来源：只允许再用它（OTP 每次仍重新取，身份不变）
+        if (!string.IsNullOrEmpty(_pinnedAnisetteSource))
+        {
+            if (_pinnedAnisetteSource == LocalAnisetteSource)
+                return allowLocalFallback
+                    ? WithProvider(CoreADIService.TryFetchAnisette(_toolsDir), LocalAnisetteSource)
+                    : null;
+
+            var pinnedUrl = _pinnedAnisetteSource;
+            var again = await TryFetchAnisetteAsync(pinnedUrl);
+            if (again == null)
+                LogService.Error($"[Anisette] 会话已锁定 {pinnedUrl}，本次重新取 OTP 失败");
+            return WithProvider(again, pinnedUrl);
+        }
+
+        // 首选远程 Mac anisette（2026-10-21 起 Windows anisette 换不到 xcode 令牌）
         foreach (var url in candidates)
         {
             try
@@ -920,8 +989,8 @@ public class AppleGsaClient : IDisposable
                 var anisette = await TryFetchAnisetteAsync(url);
                 if (anisette != null)
                 {
-                    LogService.Info($"[Anisette] 远程获取成功: {url}");
-                    return anisette;
+                    _pinnedAnisetteSource = url;
+                    return WithProvider(anisette, url);
                 }
             }
             catch (Exception ex)
@@ -930,8 +999,75 @@ public class AppleGsaClient : IDisposable
             }
         }
 
+        // 兜底：本机 CoreADI.dll（Windows 身份）。对 xcode 令牌大概率仍会被拒，
+        // 但 iCloud/其他接口可用，且日志会如实标出身份来源，不再静默混用。
+        if (!allowLocalFallback)
+        {
+            LogService.Error("[Anisette] 远程 Mac Anisette 全部不可达，且本步骤禁止回退 Windows 身份");
+            return null;
+        }
+
+        var coreAdi = CoreADIService.TryFetchAnisette(_toolsDir);
+        if (coreAdi != null)
+        {
+            _pinnedAnisetteSource = LocalAnisetteSource;
+            LogService.Warning(
+                "[Anisette] 所有远程 Mac Anisette 服务器均不可达，回退本机 Windows CoreADI。" +
+                "苹果自 2026-10-21 起拒收 Windows 身份的 Xcode 令牌(ec=-80046)，" +
+                "如非网络问题请在「高级选项」里手填一个可用的 Mac Anisette 地址。");
+            return WithProvider(coreAdi, LocalAnisetteSource);
+        }
+
         LogService.Error("[Anisette] 所有 Anisette 来源均失败");
         return null;
+    }
+
+    // <summary>给这份 anisette 标注来源，供日志与身份一致性判断使用。</summary>
+    private static AnisetteData? WithProvider(AnisetteData? a, string source)
+    {
+        if (a == null) return null;
+        a.Provider = source;
+        return a;
+    }
+
+    /// <summary>
+    /// 与 anisette 来源配套的 User-Agent：优先用 anisette 服务器自己在 /v3/client_info
+    /// 报告的值；取不到时按身份类型推断（Mac 身份配 Darwin UA，Windows 身份配 iCloud.exe UA）。
+    /// </summary>
+    private static string UserAgentFor(AnisetteData a)
+        => !string.IsNullOrEmpty(a.UserAgent) ? a.UserAgent
+         : a.IsMacIdentity ? MacUserAgent
+         : WindowsUserAgent;
+
+    private static readonly Dictionary<string, (string UserAgent, string ClientInfo)> ClientInfoCache = new();
+
+    /// <summary>
+    /// 向 anisette 服务器问一次 /v3/client_info，把它报告的 User-Agent / X-MMe-Client-Info
+    /// 绑定到这份 anisette 上。GrandSlam 会校验三者同源。
+    /// </summary>
+    private static async Task ApplyClientInfoAsync(string url, AnisetteData a)
+    {
+        try
+        {
+            if (!ClientInfoCache.TryGetValue(url, out var cached))
+            {
+                using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+                var body = await http.GetStringAsync($"{url}/v3/client_info");
+                using var doc = JsonDocument.Parse(body);
+                var root = doc.RootElement;
+                cached = (
+                    root.TryGetProperty("user_agent", out var ua) ? ua.GetString() ?? "" : "",
+                    root.TryGetProperty("client_info", out var ci) ? ci.GetString() ?? "" : "");
+                ClientInfoCache[url] = cached;
+            }
+
+            if (!string.IsNullOrEmpty(cached.UserAgent)) a.UserAgent = cached.UserAgent;
+            if (!string.IsNullOrEmpty(cached.ClientInfo)) a.ClientInfo = cached.ClientInfo;
+        }
+        catch (Exception ex)
+        {
+            LogService.Info($"[Anisette] {url} 无 /v3/client_info，按身份推断 UA: {ex.Message}");
+        }
     }
 
     private async Task<AnisetteData?> TryFetchAnisetteAsync(string baseUrl)
@@ -950,7 +1086,11 @@ public class AppleGsaClient : IDisposable
             if (resp.IsSuccessStatusCode)
             {
                 var parsed = ParseAnisette(body);
-                if (parsed != null) return parsed;
+                if (parsed != null)
+                {
+                    await ApplyClientInfoAsync(url, parsed);
+                    return parsed;
+                }
                 LogService.Error($"[Anisette] v3 响应无效: {Truncate(body, 160)}");
             }
             else
@@ -969,7 +1109,9 @@ public class AppleGsaClient : IDisposable
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
             http.DefaultRequestHeaders.Add("X-MMe-Client-Info", AnisetteData.DefaultClientInfo);
             var body = await http.GetStringAsync(url);
-            return ParseAnisette(body);
+            var parsed = ParseAnisette(body);
+            if (parsed != null) await ApplyClientInfoAsync(url, parsed);
+            return parsed;
         }
         catch (Exception ex)
         {
@@ -1062,15 +1204,22 @@ public class AppleGsaClient : IDisposable
         {
             Content = new StringContent(plistBody, Encoding.UTF8, "text/x-xml-plist")
         };
-        request.Headers.TryAddWithoutValidation("User-Agent", GS_USER_AGENT);
+        request.Headers.TryAddWithoutValidation("User-Agent", UserAgentFor(anisette));
         request.Headers.TryAddWithoutValidation("Accept", "*/*");
-        request.Headers.TryAddWithoutValidation("X-MMe-Client-Info", DefaultClientInfo);
-        request.Headers.TryAddWithoutValidation("X-Apple-Client-App-Name", "akd");
         request.Headers.TryAddWithoutValidation("Connection", "close");
 
         // GrandSlam validates that the anisette values are present as HTTP headers too
         foreach (var kvp in anisette.ToHeaders())
             request.Headers.TryAddWithoutValidation(kvp.Key, kvp.Value);
+
+        // 只有 anisette 自己没带 Client-Info 时才补 Windows 兜底值。
+        // 之前这行写在 ToHeaders() 之后，但 TryAdd 遇到重名会静默失败，
+        // 等于永远用 Windows 身份，远程 Mac 的 X-MMe-Client-Info 被丢掉。
+        if (string.IsNullOrEmpty(anisette.ClientInfo))
+            request.Headers.TryAddWithoutValidation("X-MMe-Client-Info", DefaultClientInfo);
+        request.Headers.TryAddWithoutValidation("X-Apple-Client-App-Name", "akd");
+
+        LogService.Info($"[SRP] 身份: {UserAgentFor(anisette)} | {anisette.ClientInfo}");
 
         LogService.Info("[SRP] 发送请求...");
         var response = await _http.SendAsync(request);

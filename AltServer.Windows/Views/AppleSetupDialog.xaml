@@ -79,7 +79,8 @@
                 <StackPanel Margin="0,6,0,0">
                     <TextBox x:Name="AnisetteUrlBox" FontSize="12" Padding="6,4"
                              BorderBrush="#CBD5E1" BorderThickness="1" Background="White" />
-                    <TextBlock Text="默认留空即可自动使用内置 Anisette 硬件特征服务" FontSize="10" Foreground="#94A3B8" Margin="0,2,0,0" />
+                    <TextBlock FontSize="10" Foreground="#94A3B8" Margin="0,2,0,0" TextWrapping="Wrap"
+                               Text="留空即按顺序自动尝试内置 Mac Anisette 服务（mac-ani.jkcoxson.com → new.ani.sidestore.io → ani3.stikstore.app），全部不可达才回退本机 CoreADI。2026-10-21 起苹果拒收 Windows Anisette 签发的 Xcode 令牌，若报 -80046 请在此手填一个可用的 Mac 服务地址。" />
                 </StackPanel>
             </Expander>
         </StackPanel>
